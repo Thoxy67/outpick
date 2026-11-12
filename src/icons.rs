@@ -65,10 +65,15 @@ pub enum SourceIcon {
     Cable,
     Server,
     Drive,
+    PlayStation,
+    Xbox,
+    NintendoSwitch,
+    Android,
+    Pc,
 }
 
 impl SourceIcon {
-    pub const ALL: [SourceIcon; 15] = [
+    pub const ALL: [SourceIcon; 20] = [
         SourceIcon::Auto,
         SourceIcon::Tv,
         SourceIcon::Monitor,
@@ -84,6 +89,11 @@ impl SourceIcon {
         SourceIcon::Cable,
         SourceIcon::Server,
         SourceIcon::Drive,
+        SourceIcon::PlayStation,
+        SourceIcon::Xbox,
+        SourceIcon::NintendoSwitch,
+        SourceIcon::Android,
+        SourceIcon::Pc,
     ];
 
     pub fn svg(self) -> &'static str {
@@ -102,6 +112,11 @@ impl SourceIcon {
             SourceIcon::Home => "house",
             SourceIcon::Server => "server",
             SourceIcon::Drive => "hard-drive",
+            SourceIcon::PlayStation => "playstation",
+            SourceIcon::Xbox => "xbox",
+            SourceIcon::NintendoSwitch => "nintendo-switch",
+            SourceIcon::Android => "android",
+            SourceIcon::Pc => "pc-case",
         }
     }
 
@@ -122,6 +137,11 @@ impl SourceIcon {
             SourceIcon::Cable => crate::i18n::t("icon.cable"),
             SourceIcon::Server => crate::i18n::t("icon.server"),
             SourceIcon::Drive => crate::i18n::t("icon.drive"),
+            SourceIcon::PlayStation => "PlayStation",
+            SourceIcon::Xbox => "Xbox",
+            SourceIcon::NintendoSwitch => "Nintendo Switch",
+            SourceIcon::Android => crate::i18n::t("icon.android"),
+            SourceIcon::Pc => crate::i18n::t("icon.pc"),
         }
     }
 }

@@ -112,15 +112,105 @@ impl Source {
     }
 }
 
+/// What an HDMI input says about the device behind it, from `eim/getAllInputStatus`.
+#[derive(Default, Clone, Debug)]
+pub struct DeviceHints {
+    /// HDMI-CEC: the device's OSD name, vendor id (IEEE OUI) and device type
+    /// (0 TV, 1 recorder, 3 tuner/set-top box, 4 playback, 5 audio system).
+    pub cec_name: String,
+    pub cec_vendor: Option<u64>,
+    pub cec_type: Option<u64>,
+    /// HDMI source product description info frame: maker, product, source type ("Digital STB", "PC general"…).
+    pub spd_vendor: String,
+    pub spd_product: String,
+    pub spd_type: String,
+    /// LG's own guess and the user's choice in the TV's input settings: icon file, label, universal-remote brand/service.
+    pub lg_icon: String,
+    pub label: String,
+    pub remote_brand: String,
+    pub remote_service: String,
+}
+
+/// The icon of an HDMI input's device. HDMI-CEC first (the device's own name, maker
+/// and device type); then the HDMI info frame and LG's settings, for devices without
+/// CEC (most PCs) or with an anonymous CEC name.
+pub fn detect_icon(h: &DeviceHints, kind: SourceKind) -> SourceIcon {
+    let words = |s: &str| -> Vec<String> { s.to_ascii_lowercase().split(|c: char| !c.is_ascii_alphanumeric()).filter(|w| !w.is_empty()).map(str::to_string).collect() };
+    let low = |s: &str| s.to_ascii_lowercase();
+    let cec_maker = h.cec_vendor.and_then(cec_vendor).unwrap_or("");
+    let cec = low(&format!("{} {}", h.cec_name, cec_maker));
+    let cec_w = words(&cec);
+    let all = low(&format!("{} {} {} {} {} {} {} {} {}", cec, h.spd_vendor, h.spd_product, h.spd_type, h.lg_icon, h.label, h.remote_brand, h.remote_service, ""));
+    let all_w = words(&all);
+    let w_has = |ws: &Vec<String>, list: &[&str]| ws.iter().any(|w| list.contains(&w.as_str()));
+    let any = |s: &str, list: &[&str]| list.iter().any(|x| s.contains(x));
+
+    // 1. Consoles by name or maker (CEC, then the info frame and labels).
+    for text in [&cec, &all] {
+        let ws = words(text);
+        if text.contains("xbox") || text.contains("microsoft") {
+            return SourceIcon::Xbox;
+        }
+        if text.contains("playstation") || w_has(&ws, &["ps3", "ps4", "ps5", "scei", "sie"]) {
+            return SourceIcon::PlayStation;
+        }
+        if text.contains("nintendo") {
+            return SourceIcon::NintendoSwitch;
+        }
+    }
+    // 2. Audio systems: CEC device type 5, or LG's home theater / sound bar icon.
+    if h.cec_type == Some(5) || any(&low(&h.lg_icon), &["hometheater", "soundbar", "audio"]) {
+        return SourceIcon::Speaker;
+    }
+    // 3. Android TV / Google TV boxes: by CEC name or maker (Google, NVIDIA Shield…), else
+    //    by the chip in the info frame (Amlogic, Rockchip… reference boards) or the box's brand.
+    let android_names = ["android", "shield", "chromecast", "google", "fire tv", "firetv", "fire stick", "mi box", "mibox", "xiaomi", "mecool", "ugoos", "zidoo", "homatics", "formuler", "dune hd"];
+    let chips = ["amlogic", "meson", "rockchip", "allwinner", "hisilicon", "realtek", "mediatek"];
+    if any(&cec, &android_names) || matches!(h.cec_vendor, Some(0x001A11 | 0x00044B)) {
+        return SourceIcon::Android;
+    }
+    let spd = low(&format!("{} {}", h.spd_vendor, h.spd_product));
+    if any(&spd, &chips) || any(&spd, &android_names) || any(&low(&h.remote_brand), &android_names) || all.contains("android") {
+        return SourceIcon::Android;
+    }
+    // 4. PCs: rarely on CEC (a Pulse-Eight / libCEC adapter, Kodi), else the info frame's
+    //    "PC general" source type, a graphics maker, or LG's PC icon / a "PC" label.
+    if matches!(h.cec_vendor, Some(0x001582)) || any(&cec, &["kodi", "libcec", "pulse-eight"])
+        || low(&h.spd_type).contains("pc")
+        || any(&spd, &["nvidia", "geforce", "amd", "radeon", "intel", "ati technologies"])
+        || w_has(&all_w, &["pc", "computer", "ordinateur", "laptop", "windows", "steam"])
+        || any(&low(&h.lg_icon), &["pc", "computer", "laptop"])
+    {
+        return SourceIcon::Pc;
+    }
+    // 5. Apple TV, Roku and other players by CEC name or maker; then LG's icon and labels.
+    if any(&cec, &["apple tv", "appletv", "roku"]) || matches!(h.cec_vendor, Some(0x0010FA)) || w_has(&cec_w, &["apple"]) {
+        return SourceIcon::StreamingBox;
+    }
+    if h.cec_type == Some(3) {
+        return SourceIcon::StreamingBox;
+    }
+    icon_from_tv(&all, kind)
+}
+
 /// Maps the icon file names LG uses in `eim/getAllInputStatus` onto ours.
 pub fn icon_from_tv(name: &str, kind: SourceKind) -> SourceIcon {
     let n = name.to_ascii_lowercase();
     let has = |s: &str| n.contains(s);
-    if has("stream") || has("settop") || has("stb") || has(" ott") || has("box") || has("ott") || has("box") || has("cable") && has("box") {
+    // Whole words, so "xbox" is not a box and "spc" not a PC.
+    let words: Vec<&str> = n.split(|c: char| !c.is_ascii_alphanumeric()).filter(|w| !w.is_empty()).collect();
+    let word = |s: &str| words.contains(&s);
+    if has("xbox") {
+        SourceIcon::Xbox
+    } else if has("playstation") {
+        SourceIcon::PlayStation
+    } else if has("stream") || has("settop") || word("stb") || word("ott") || word("box") || has("streamingbox") {
         SourceIcon::StreamingBox
     } else if has("game") || has("console") || has("playstation") || has("xbox") || has("switch") {
         SourceIcon::Console
-    } else if has("pc") || has("computer") || has("laptop") {
+    } else if word("pc") || has("computer") {
+        SourceIcon::Pc
+    } else if has("laptop") {
         SourceIcon::Computer
     } else if has("sound") || has("bar") || has("theater") || has("hometheater") || has("denon") || has("sonos") || has("audio") || has("speaker") || has("receiver") || has("avr") {
         SourceIcon::Speaker
@@ -205,6 +295,9 @@ pub fn cec_vendor(id: u64) -> Option<&'static str> {
         0x5CAD76 => "TCL",
         0x9C645E => "Harman",
         0x0013E0 => "Sonos",
+        0x0050F2 => "Microsoft",
+        0x0009BF => "Nintendo",
+        0x001582 => "Pulse-Eight",
         _ => return None,
     })
 }
@@ -343,10 +436,10 @@ pub fn mock_backend(repaint: impl Fn() + Send + 'static) -> Backend {
             let mut st = s.lock().unwrap();
             let mut sources = vec![
                 Source::live_tv(),
-                src(1, "Mecool OTT", true, Some("TV Thoxy"), SourceIcon::StreamingBox),
+                src(1, "Mecool OTT", true, Some("TV Thoxy"), SourceIcon::Android),
                 src(2, "Denon Barre de son", true, Some("AVC-S660H"), SourceIcon::Speaker),
-                src(3, "HDMI 3", false, None, SourceIcon::Cable),
-                src(4, "PlayStation 5", false, None, SourceIcon::Console),
+                src(3, "PC", true, Some("Gaming PC"), SourceIcon::Pc),
+                src(4, "Xbox", true, Some("Xbox Series X"), SourceIcon::Xbox),
             ];
             sources[2].brand = Some("Denon".into());
             sources[1].brand = Some("Mecool".into());
@@ -396,4 +489,61 @@ pub fn mock_backend(repaint: impl Fn() + Send + 'static) -> Backend {
         }
     });
     Backend { state, commands: tx, preview_fps: Arc::new(AtomicU32::new(0)) }
+}
+
+#[cfg(test)]
+mod icon_tests {
+    use super::*;
+
+    fn hdmi(f: impl FnOnce(&mut DeviceHints)) -> SourceIcon {
+        let mut h = DeviceHints::default();
+        f(&mut h);
+        detect_icon(&h, SourceKind::Hdmi)
+    }
+
+    #[test]
+    fn real_devices() {
+        // LG C1, HDMI 1: Mecool KM2 (Android TV), named "TV Thoxy" over CEC.
+        let mecool = hdmi(|h| {
+            h.cec_name = "TV Thoxy".into();
+            h.cec_vendor = Some(0x1CA410);
+            h.cec_type = Some(4);
+            h.spd_vendor = "Amlogic".into();
+            h.spd_product = "MBox Meson Ref".into();
+            h.spd_type = "Digital STB".into();
+            h.lg_icon = "streamingbox.png".into();
+            h.label = "Mecool OTT".into();
+            h.remote_brand = "Mecool".into();
+            h.remote_service = "ott".into();
+        });
+        assert_eq!(mecool, SourceIcon::Android);
+        // Denon AV receivers over CEC (audio system).
+        let denon = hdmi(|h| {
+            h.cec_name = "AVC-S670H".into();
+            h.cec_vendor = Some(0x0005CD);
+            h.cec_type = Some(5);
+            h.lg_icon = "HDMI_3.png".into();
+        });
+        assert_eq!(denon, SourceIcon::Speaker);
+        // Nothing plugged in.
+        assert_eq!(hdmi(|h| h.lg_icon = "HDMI_4.png".into()), SourceIcon::Cable);
+    }
+
+    #[test]
+    fn consoles_and_pcs() {
+        assert_eq!(hdmi(|h| { h.cec_name = "PlayStation 5".into(); h.cec_vendor = Some(0x080046); h.cec_type = Some(4) }), SourceIcon::PlayStation);
+        assert_eq!(hdmi(|h| { h.cec_name = "Xbox Series X".into(); h.cec_type = Some(4) }), SourceIcon::Xbox);
+        assert_eq!(hdmi(|h| { h.cec_name = "XBOX ONE".into() }), SourceIcon::Xbox);
+        assert_eq!(hdmi(|h| h.cec_vendor = Some(0x0050F2)), SourceIcon::Xbox);
+        assert_eq!(hdmi(|h| h.cec_vendor = Some(0x0009BF)), SourceIcon::NintendoSwitch);
+        assert_eq!(hdmi(|h| { h.cec_name = "SHIELD".into(); h.cec_vendor = Some(0x00044B) }), SourceIcon::Android);
+        assert_eq!(hdmi(|h| h.cec_name = "Chromecast".into()), SourceIcon::Android);
+        assert_eq!(hdmi(|h| { h.spd_vendor = "NVIDIA".into(); h.spd_type = "PC general".into() }), SourceIcon::Pc);
+        assert_eq!(hdmi(|h| h.label = "PC".into()), SourceIcon::Pc);
+        assert_eq!(hdmi(|h| h.lg_icon = "pc.png".into()), SourceIcon::Pc);
+        assert_eq!(hdmi(|h| { h.cec_name = "Apple TV".into(); h.cec_vendor = Some(0x0010FA) }), SourceIcon::StreamingBox);
+        // "xbox" holds "box", "spc" holds "pc": neither may decide.
+        assert_eq!(icon_from_tv("xbox", SourceKind::Hdmi), SourceIcon::Xbox);
+        assert_eq!(icon_from_tv("hdmi_spc", SourceKind::Hdmi), SourceIcon::Cable);
+    }
 }

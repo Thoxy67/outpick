@@ -231,6 +231,8 @@ icon.movie = Films
 icon.antenna = Antenne
 icon.usb = USB
 icon.home = Maison
+icon.android = Box Android
+icon.pc = PC
 icon.cable = Câble
 
 # Erreurs

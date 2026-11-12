@@ -15,3 +15,7 @@ Lucide (https://lucide.dev), ISC License, Copyright (c) for portions of Lucide a
   Lucide Contributors 2022: assets/icons/.
 
 SDL-webOS (https://github.com/webosbrew/SDL-webOS), zlib License: the bundled libSDL2-2.0.so.0.
+
+Simple Icons (https://simpleicons.org), CC0 1.0: assets/icons/{playstation,xbox,nintendo-switch,android}.svg.
+  PlayStation, Xbox, Nintendo Switch and Android are trademarks of their owners, shown only
+  to identify the device plugged into an input.

@@ -208,15 +208,20 @@ pub fn parse_inputs(v: &Value) -> Vec<Source> {
             .or(spd_vendor);
         let signal = d.get("hdmiSignalExist").and_then(Value::as_bool);
         let label_custom = d.get("modified").and_then(Value::as_bool).unwrap_or(false);
-        // Icon hints: LG's icon file, its label, the HDMI info frame and the CEC device type.
-        let cec_type = match cec.as_ref().and_then(|c| c.get("cecpDevType")).and_then(Value::as_u64) {
-            Some(5) => "audio",
-            Some(3) => "settop",
-            Some(1) => "player",
-            _ => "",
+        // The icon: HDMI-CEC first, then the info frame and LG's settings.
+        let hints = crate::model::DeviceHints {
+            cec_name: text(&cec, "osdName").unwrap_or_default(),
+            cec_vendor: cec.as_ref().and_then(|c| c.get("vendorId")).and_then(Value::as_u64),
+            cec_type: cec.as_ref().and_then(|c| c.get("cecpDevType")).and_then(Value::as_u64),
+            spd_vendor: s("spdVendorName"),
+            spd_product: s("spdProductDescription"),
+            spd_type: s("spdSourceDeviceInfo"),
+            lg_icon: s("icon"),
+            label: label.clone(),
+            remote_brand: text(&urcu, "brandName").unwrap_or_default(),
+            remote_service: text(&urcu, "serviceType").unwrap_or_default(),
         };
-        let hints = format!("{} {} {} {} {}", s("icon"), label, s("spdSourceDeviceInfo"), text(&urcu, "serviceType").unwrap_or_default(), cec_type);
-        let tv_icon = icon_from_tv(&hints, kind);
+        let tv_icon = crate::model::detect_icon(&hints, kind);
         out.push(Source { tv_icon, id, app_id, label, kind, connected, device, params: None, brand, label_custom, signal });
     }
     out
