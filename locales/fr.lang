@@ -40,6 +40,7 @@ hint.next_icon = Icône suivante
 hint.rename = Renommer
 hint.drop = Poser
 hint.save = Enregistrer
+hint.confirm = Valider
 hint.cancel = Annuler
 hint.cec_options = Options CEC
 options.switch = Afficher cette entrée

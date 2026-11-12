@@ -40,6 +40,7 @@ hint.next_icon = Next icon
 hint.rename = Rename
 hint.drop = Drop
 hint.save = Save
+hint.confirm = Confirm
 hint.cancel = Cancel
 hint.cec_options = CEC options
 options.switch = Switch to this input

@@ -783,7 +783,7 @@ impl App {
         }
         let ring = Rect::from_min_size(pos2(hx, top), vec2(cw, ch)).expand(5.0 * s);
         p.rect_stroke(ring, k.radius_lg * 1.4 * s + 5.0 * s, Stroke::new(3.0 * s, veil(k.accent, alpha)), StrokeKind::Outside);
-        self.footer(p, rect, &[("◀ ▶", t("hint.choose")), (t("key.ok"), t("hint.save")), (t("key.back"), t("hint.cancel"))], alpha);
+        self.footer(p, rect, &[("◀ ▶", t("hint.choose")), (t("key.ok"), t("hint.confirm")), (t("key.back"), t("hint.cancel"))], alpha);
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -814,7 +814,7 @@ impl App {
         let at = Rect::from_min_size(pos2(self.anim(ui, "pos-x", target.min.x, 0.14), self.anim(ui, "pos-y", target.min.y, 0.14)), target.size());
         p.rect(at, 5.0 * s, veil(k.accent_soft, alpha), Stroke::new(2.5 * s, veil(k.accent, alpha)), StrokeKind::Inside);
         self.layout_glyph(p, at.shrink(3.0 * s), self.cfg.layout, veil(k.accent, alpha));
-        self.footer(p, rect, &[("◀ ▲ ▼ ▶", t("hint.move")), (t("key.ok"), t("hint.save")), (t("key.back"), t("hint.cancel"))], alpha);
+        self.footer(p, rect, &[("◀ ▲ ▼ ▶", t("hint.move")), (t("key.ok"), t("hint.confirm")), (t("key.back"), t("hint.cancel"))], alpha);
     }
 
     /// The key that opens CEC options in this layout.
@@ -1923,7 +1923,7 @@ impl App {
         }
         ui.ctx().request_repaint_after(std::time::Duration::from_millis(500));
         p.text(pos2(field.min.x, field.max.y + 20.0 * s), Align2::LEFT_TOP, t("rename.empty"), regular(17.0 * s), veil(k.text_dim, alpha));
-        self.footer(p, rect, &[(t("key.ok"), t("hint.save")), (t("key.back"), t("hint.cancel"))], alpha);
+        self.footer(p, rect, &[(t("key.ok"), t("hint.confirm")), (t("key.back"), t("hint.cancel"))], alpha);
     }
 
     #[allow(clippy::too_many_arguments)]
