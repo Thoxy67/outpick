@@ -1,11 +1,11 @@
 //! Ported from Luma (MIT, Copyright (c) 2026 Luma contributors): lg-luma/src/luna.rs,
 //! without the app-impersonating subscription.
-use libc::{c_char, c_int, c_ulong, c_void};
+use libc::{c_char, c_int, c_uint, c_ulong, c_void};
 use serde_json::Value;
 use std::{
+    cell::{Cell, RefCell},
     ffi::{CStr, CString},
     panic::{AssertUnwindSafe, catch_unwind},
-
     ptr,
     sync::mpsc,
     thread,
@@ -60,6 +60,23 @@ unsafe extern "C" {
     fn g_main_context_new() -> *mut c_void;
     fn g_main_context_iteration(context: *mut c_void, may_block: c_int) -> c_int;
     fn g_main_context_unref(context: *mut c_void);
+    fn g_timeout_source_new(interval: c_uint) -> *mut c_void;
+    fn g_source_set_callback(
+        source: *mut c_void,
+        func: extern "C" fn(*mut c_void) -> c_int,
+        data: *mut c_void,
+        notify: *const c_void,
+    );
+    fn g_source_attach(source: *mut c_void, context: *mut c_void) -> c_uint;
+    fn g_source_destroy(source: *mut c_void);
+    fn g_source_unref(source: *mut c_void);
+}
+
+/// The request deadline: marks it passed and removes its source (G_SOURCE_REMOVE).
+extern "C" fn deadline_passed(flag: *mut c_void) -> c_int {
+    // SAFETY: `flag` is the Cell on `request`'s stack, which destroys this source before returning.
+    unsafe { (*flag.cast::<Cell<bool>>()).set(true) };
+    0
 }
 
 impl Error {
@@ -182,17 +199,39 @@ impl Connection {
                 &mut error,
             )
         } {
-            return Err(error.describe("call submission"));
+            return Err(error.describe(SUBMISSION));
         }
+        // Block on the private context until the reply or the deadline (a GLib
+        // timeout source on the same context), instead of polling.
+        let timed_out = Cell::new(false);
+        let millis = timeout.as_millis().clamp(1, c_uint::MAX as u128) as c_uint;
+        // SAFETY: the source is attached to this connection's private context and
+        // destroyed (then unreferenced) below, before `timed_out` goes out of scope.
+        let source = unsafe {
+            let source = g_timeout_source_new(millis);
+            g_source_set_callback(source, deadline_passed, ptr::from_ref(&timed_out).cast_mut().cast(), ptr::null());
+            g_source_attach(source, self.context);
+            source
+        };
         let deadline = Instant::now() + timeout;
-        while Instant::now() < deadline {
-            // SAFETY: only this worker drives this private context. Iteration is
-            // nonblocking, so a missing service cannot hold the UI or this loop.
-            unsafe { g_main_context_iteration(self.context, 0) };
+        let result = loop {
+            // SAFETY: only this thread drives this private context. The timeout
+            // source bounds the wait, so a missing service cannot hang the caller.
+            unsafe { g_main_context_iteration(self.context, 1) };
             if let Some(result) = self.reply.as_mut().and_then(|reply| reply.result.take()) {
-                return result;
+                break Some(result);
             }
-            thread::sleep(Duration::from_millis(2));
+            if timed_out.get() || Instant::now() >= deadline + Duration::from_millis(50) {
+                break None;
+            }
+        };
+        // SAFETY: destroying an already removed source is a no-op; the unref drops our reference.
+        unsafe {
+            g_source_destroy(source);
+            g_source_unref(source);
+        }
+        if let Some(result) = result {
+            return result;
         }
         let mut cancel_error = Error::new();
         // SAFETY: handle/token belong to this live request. Even a refused cancel
@@ -200,9 +239,13 @@ impl Connection {
         if !unsafe { LSCallCancel(self.handle, token, &mut cancel_error) } {
             eprintln!("{}", cancel_error.describe("timeout cancellation"));
         }
-        Err("The TV service timed out".into())
+        Err(TIMED_OUT.into())
     }
 }
+
+const TIMED_OUT: &str = "The TV service timed out";
+const SUBMISSION: &str = "call submission";
+const SUBMISSION_FAILED: &str = "LS2 call submission";
 
 impl Drop for Connection {
     fn drop(&mut self) {
@@ -228,8 +271,37 @@ pub fn call(uri: &str, payload: &Value) -> Result<Value, String> {
     call_with_timeout(uri, payload, Duration::from_millis(6500))
 }
 
+thread_local! {
+    /// One LS2 registration per calling thread, kept between calls.
+    static CONNECTION: RefCell<Option<Connection>> = const { RefCell::new(None) };
+}
+
 pub fn call_with_timeout(uri: &str, payload: &Value, timeout: Duration) -> Result<Value, String> {
-    Connection::open()?.request(uri, payload, timeout)
+    CONNECTION.with(|slot| {
+        let mut slot = slot.borrow_mut();
+        let mut retried = false;
+        loop {
+            let connection = match slot.as_mut() {
+                Some(connection) => connection,
+                None => slot.insert(Connection::open()?),
+            };
+            match connection.request(uri, payload, timeout) {
+                Ok(value) => return Ok(value),
+                Err(error) if error == TIMED_OUT => {
+                    // Not retried (that would double the wait), but the connection goes:
+                    // unregistering is what makes a late reply to the cancelled call harmless.
+                    *slot = None;
+                    return Err(error);
+                }
+                Err(error) if !retried && error.starts_with(SUBMISSION_FAILED) => {
+                    // The registration went bad (e.g. the hub restarted): open a new one, once.
+                    *slot = None;
+                    retried = true;
+                }
+                Err(error) => return Err(error),
+            }
+        }
+    })
 }
 
 type Sink = Box<dyn FnMut(Value) + Send>;

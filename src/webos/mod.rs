@@ -20,7 +20,40 @@ use std::time::{Duration, Instant};
 
 pub const APP_ID: &str = "com.thoxy.sourcepicker";
 
+/// Startup trace (`LG_SOURCE_TRACE=1`, or the file /tmp/lg-c1-source.trace):
+/// prints the milliseconds since the process started at each step.
+pub(crate) fn trace(step: &str) {
+    static START: std::sync::OnceLock<Option<u64>> = std::sync::OnceLock::new();
+    let start = START.get_or_init(|| {
+        let on = std::env::var_os("LG_SOURCE_TRACE").is_some_and(|v| v == "1")
+            || std::path::Path::new("/tmp/lg-c1-source.trace").exists();
+        on.then(|| process_start_us().unwrap_or_else(now_us))
+    });
+    if let Some(start) = start {
+        eprintln!("trace: {} ms  {step}", now_us().saturating_sub(*start) / 1000);
+    }
+}
+
+/// CLOCK_BOOTTIME in µs, the clock /proc/<pid>/stat's start time counts in.
+fn now_us() -> u64 {
+    let mut ts = libc::timespec { tv_sec: 0, tv_nsec: 0 };
+    // SAFETY: a valid out pointer.
+    unsafe { libc::clock_gettime(libc::CLOCK_BOOTTIME, &mut ts) };
+    ts.tv_sec as u64 * 1_000_000 + ts.tv_nsec as u64 / 1000
+}
+
+/// When this process was started (exec), from /proc/self/stat (10 ms resolution).
+fn process_start_us() -> Option<u64> {
+    let stat = std::fs::read_to_string("/proc/self/stat").ok()?;
+    // Field 22 (starttime, in clock ticks since boot), counted after the ")" ending the name.
+    let ticks: u64 = stat.rsplit_once(')')?.1.split_whitespace().nth(19)?.parse().ok()?;
+    // SAFETY: sysconf has no preconditions.
+    let hz = unsafe { libc::sysconf(libc::_SC_CLK_TCK) }.max(1) as u64;
+    Some(ticks * 1_000_000 / hz)
+}
+
 pub fn run() -> Result<(), String> {
+    trace("main entry");
     if std::env::var_os("APPID").is_none() {
         // SAFETY: single-threaded at this point; SDL-webOS reads it for the shell surface.
         unsafe { std::env::set_var("APPID", APP_ID) };
@@ -42,21 +75,23 @@ pub fn run() -> Result<(), String> {
         gl.set_alpha_size(8);
         gl.set_double_buffer(true);
     }
-    let window = video
+    let mut window = video
         .window("Inputs", 1920, 1080)
         .opengl()
         .fullscreen_desktop()
         .build()
         .map_err(|e| e.to_string())?;
+    trace("window created");
     // Before the first buffer: float over the app in front instead of replacing it.
     if let Err(e) = overlay::make_overlay(&window) {
         eprintln!("{e}; showing as a normal window");
     }
-    let _gl_context = window.gl_create_context()?;
+    let gl_context = window.gl_create_context()?;
     let _ = video.gl_set_swap_interval(1);
     // SAFETY: the context above is current on this thread for the whole run.
     let gl = Arc::new(unsafe { glow::Context::from_loader_function(|s| video.gl_get_proc_address(s) as *const _) });
     let mut painter = egui_glow::Painter::new(gl.clone(), "", None, false).map_err(|e| e.to_string())?;
+    trace("GL ready");
 
     let ctx = egui::Context::default();
     let wake = sdl.event()?.event_sender();
@@ -88,7 +123,9 @@ pub fn run() -> Result<(), String> {
         move || ctx.request_repaint()
     };
     let (backend, worker) = tv::start(repaint);
+    let shared = backend.state.clone();
     let mut app = App::new(&ctx, backend);
+    let mut traced = (false, false); // first swap, first frame with tiles
 
     let text_input = video.text_input();
     text_input.stop();
@@ -162,6 +199,7 @@ pub fn run() -> Result<(), String> {
             ..Default::default()
         };
         ctx.set_pixels_per_point(ppp);
+        let tiles = !traced.1 && shared.lock().is_ok_and(|st| st.loaded && !st.sources.is_empty());
         let mut outcome = Outcome::Continue;
         let out = ctx.run_ui(raw, |ui| outcome = app.ui(ui, &keys));
         let prims = ctx.tessellate(out.shapes, out.pixels_per_point);
@@ -175,6 +213,14 @@ pub fn run() -> Result<(), String> {
         }
         painter.paint_and_update_textures([w, h], out.pixels_per_point, &prims, &mut textures);
         window.gl_swap_window();
+        if !traced.0 {
+            traced.0 = true;
+            trace("first swap");
+        }
+        if tiles {
+            traced.1 = true;
+            trace("first frame with tiles");
+        }
         if outcome == Outcome::Close {
             break;
         }
@@ -185,7 +231,17 @@ pub fn run() -> Result<(), String> {
             .unwrap_or(Duration::MAX);
         next_paint = Instant::now().checked_add(delay).unwrap_or_else(|| Instant::now() + Duration::from_secs(3600));
     }
+    // Off the screen at once, before saving and waiting for the worker (a CEC key waits
+    // for its input to come up): with the window gone the remote goes back to the app in front.
+    window.hide();
     painter.destroy();
+    drop(painter);
+    drop(gl);
+    drop(gl_context);
+    text_input.stop();
+    drop(window);
+    app.shutdown(); // every way out (closed, Quit, window closed) saves the settings
+    tv::flush_preview();
     drop(app); // drops the command sender: the worker finishes a pending switch, then ends
     let _ = worker.join();
     Ok(())

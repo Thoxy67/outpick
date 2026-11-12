@@ -164,6 +164,11 @@ impl App {
         let _ = self.backend.commands.send(Command::Refresh);
     }
 
+    /// Called on every way out (closed, quit, window closed): saves the settings.
+    pub fn shutdown(&mut self) {
+        self.persist();
+    }
+
     /// Whether a text field is open: the runner shows the on-screen keyboard.
     pub fn wants_text_input(&self) -> bool {
         matches!(self.screen, Screen::Rename { .. }) && self.closing.is_none()
@@ -296,6 +301,17 @@ impl App {
                 } else {
                     ctx.request_repaint_after(std::time::Duration::from_secs_f64(left.min(1.0)));
                 }
+            }
+        }
+        // Settings are saved once the keys pause (400 ms), so a kill loses at most the
+        // last change; not while the clock is being placed (Back restores it). TV only:
+        // the desktop's scripted screenshots must not rewrite their --config file.
+        if cfg!(feature = "webos") && self.cfg != self.saved && !matches!(self.screen, Screen::ClockPlace { .. }) {
+            let idle = now - self.last_key;
+            if idle >= 0.4 {
+                self.persist();
+            } else {
+                ctx.request_repaint_after(std::time::Duration::from_secs_f64(0.4 - idle));
             }
         }
         self.draw(ui, &st, &entries, fade_in);

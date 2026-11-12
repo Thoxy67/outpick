@@ -5,11 +5,14 @@
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::sync::OnceLock;
+use std::sync::{Mutex, OnceLock};
 
 include!(concat!(env!("OUT_DIR"), "/icons.rs"));
 
-static TEXTURES: OnceLock<HashMap<&'static str, egui::TextureHandle>> = OnceLock::new();
+/// The context textures are made in (`install`), and those made so far:
+/// each icon is uploaded the first time it is painted, not all before the first frame.
+static CONTEXT: OnceLock<egui::Context> = OnceLock::new();
+static TEXTURES: OnceLock<Mutex<HashMap<&'static str, egui::TextureHandle>>> = OnceLock::new();
 
 fn unrle(data: &[u8]) -> Vec<u8> {
     let mut out = Vec::with_capacity(ICON_PX * ICON_PX);
@@ -20,28 +23,33 @@ fn unrle(data: &[u8]) -> Vec<u8> {
     out
 }
 
-/// Uploads every icon once (white, alpha from the mask, mipmapped so small
-/// sizes stay smooth).
+/// Remembers the context icons are uploaded to (once each, on first use:
+/// white, alpha from the mask, mipmapped so small sizes stay smooth).
 pub fn install(ctx: &egui::Context) {
-    TEXTURES.get_or_init(|| {
-        let options = egui::TextureOptions { mipmap_mode: Some(egui::TextureFilter::Linear), ..egui::TextureOptions::LINEAR };
-        ICONS
-            .iter()
-            .map(|(name, rle)| {
-                let pixels = unrle(rle).into_iter().map(egui::Color32::from_white_alpha).collect();
-                let image = egui::ColorImage { size: [ICON_PX, ICON_PX], source_size: egui::vec2(ICON_PX as f32, ICON_PX as f32), pixels };
-                (*name, ctx.load_texture(format!("icon-{name}"), image, options))
-            })
-            .collect()
-    });
+    let _ = CONTEXT.set(ctx.clone());
+}
+
+fn texture(name: &str) -> Option<egui::TextureId> {
+    let mut textures = TEXTURES.get_or_init(Default::default).lock().ok()?;
+    if let Some(tex) = textures.get(name) {
+        return Some(tex.id());
+    }
+    let (name, rle) = ICONS.iter().find(|(n, _)| *n == name)?;
+    let options = egui::TextureOptions { mipmap_mode: Some(egui::TextureFilter::Linear), ..egui::TextureOptions::LINEAR };
+    let pixels = unrle(rle).into_iter().map(egui::Color32::from_white_alpha).collect();
+    let image = egui::ColorImage { size: [ICON_PX, ICON_PX], source_size: egui::vec2(ICON_PX as f32, ICON_PX as f32), pixels };
+    let tex = CONTEXT.get()?.load_texture(format!("icon-{name}"), image, options);
+    let id = tex.id();
+    textures.insert(*name, tex);
+    Some(id)
 }
 
 /// Paints icon `name` into `rect`, tinted, through `p` (so it obeys the
 /// painter's clip rect).
 pub fn paint(p: &egui::Painter, name: &str, rect: egui::Rect, tint: egui::Color32) {
-    if let Some(tex) = TEXTURES.get().and_then(|t| t.get(name)) {
+    if let Some(tex) = texture(name) {
         let uv = egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0));
-        p.image(tex.id(), rect, uv, tint);
+        p.image(tex, rect, uv, tint);
     }
 }
 

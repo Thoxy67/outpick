@@ -4,7 +4,7 @@
 //! `home.js` do. LS2 calls go through Luma's FFI; `luna-send` is the fallback.
 
 use super::luna;
-use crate::model::{Backend, Command, Preview, Shared, Source, SourceKind, decode_bmp, icon_from_tv};
+use crate::model::{Backend, Command, KeyOwner, Preview, Shared, Source, SourceKind, decode_bmp, icon_from_tv};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::Instant;
@@ -30,15 +30,35 @@ pub(crate) fn call(uri: &str, payload: &Value) -> Result<Value, String> {
 
 /// Pictures for the tiles. While the picker is open, the input in front is
 /// captured (video plane only, so not the picker itself) a few times a second,
-/// to `preview-<id>.bmp` in the shared folder; every input keeps its last
-/// picture there, shown until it is seen again. webOS 6 refuses video
+/// to a file in /tmp (RAM); every input keeps its last picture as
+/// `preview-<id>.bmp` in the shared folder, written once per session and input
+/// (`flush_preview`), shown until it is seen again. webOS 6 refuses video
 /// capture even to root, so there it stops at once and the tiles stay plain.
 /// Set when capture access changes, so a stopped preview loop tries again.
 static PREVIEW_RETRY: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
+/// Where live pictures land: tmpfs, not the eMMC.
+const LIVE_PATH: &str = "/tmp/lg-c1-source-live.bmp";
+
+/// The newest live picture (source id, BMP bytes) not yet kept in the shared folder.
+static UNSAVED: std::sync::Mutex<Option<(String, Vec<u8>)>> = std::sync::Mutex::new(None);
+
+fn preview_path(id: &str) -> String {
+    format!("{}/preview-{id}.bmp", super::takeover::DIR)
+}
+
+/// Keeps the newest live picture as its input's last picture (tmp file, then rename).
+pub fn flush_preview() {
+    let Some((id, bmp)) = UNSAVED.lock().ok().and_then(|mut u| u.take()) else { return };
+    let path = preview_path(&id);
+    let tmp = format!("{path}.tmp");
+    if let Err(e) = std::fs::write(&tmp, bmp).and_then(|()| std::fs::rename(&tmp, &path)) {
+        eprintln!("preview: {path}: {e}");
+    }
+}
+
 fn preview_loop(state: Shared, fps: Arc<AtomicU32>, repaint: impl Fn()) {
     let dir = super::takeover::DIR;
-    let path_of = |id: &str| format!("{dir}/preview-{id}.bmp");
     // Last pictures from earlier sessions: every preview-<id>.bmp in the folder
     // (read straight away, not after the inputs are listed, which comes later).
     {
@@ -56,16 +76,26 @@ fn preview_loop(state: Shared, fps: Arc<AtomicU32>, repaint: impl Fn()) {
         state.lock().unwrap().previews.extend(stored);
     }
     repaint();
+    let _ = super::takeover::open_dir();
     let mut seq = 1u64;
     let mut via_root = false;
+    // Capturing to /tmp; after two failed read-backs, straight into the shared folder.
+    let mut to_tmp = true;
+    let mut tmp_failures = 0;
+    let mut logged = false;
     loop {
         let rate = fps.load(Ordering::Relaxed);
         if rate == 0 {
+            flush_preview();
             std::thread::sleep(Duration::from_millis(250));
             continue;
         }
         let started = Instant::now();
-        let period = Duration::from_millis(1000 / rate.max(1) as u64);
+        let mut period = Duration::from_millis(1000 / rate.max(1) as u64);
+        if via_root {
+            // A root shell and a luna-send process per picture: at most one a second.
+            period = period.max(Duration::from_secs(1));
+        }
         // The source whose app is in front (an HDMI input, or Live TV).
         let id = {
             let st = state.lock().unwrap();
@@ -77,8 +107,7 @@ fn preview_loop(state: Shared, fps: Arc<AtomicU32>, repaint: impl Fn()) {
             }
         };
         if let Some(id) = id {
-            let _ = super::takeover::open_dir();
-            let path = path_of(&id);
+            let path = if to_tmp { LIVE_PATH.to_string() } else { preview_path(&id) };
             let payload = json!({ "path": path, "method": "VIDEO", "width": 320, "height": 180, "format": "BMP" });
             let result = if via_root {
                 let cmd = format!("luna-send -n 1 -w 3000 luna://com.webos.service.capture/executeOneShot '{payload}'");
@@ -89,16 +118,42 @@ fn preview_loop(state: Shared, fps: Arc<AtomicU32>, repaint: impl Fn()) {
             };
             match result {
                 Ok(v) if v.get("returnValue").and_then(Value::as_bool) == Some(true) => {
-                    if let Some((width, height, rgba)) = std::fs::read(&path).ok().and_then(|b| decode_bmp(&b)) {
-                        seq += 1;
-                        let mut st = state.lock().unwrap();
-                        st.preview_supported = Some(true);
-                        for p in st.previews.values_mut() {
-                            p.live = false;
+                    let bmp = std::fs::read(&path).ok();
+                    match bmp.as_deref().and_then(decode_bmp) {
+                        Some((width, height, rgba)) => {
+                            if !logged {
+                                logged = true;
+                                eprintln!("preview: {}", if via_root { "via-root" } else { "direct" });
+                            }
+                            tmp_failures = 0;
+                            if to_tmp {
+                                // A new input in front: keep the last picture of the one before.
+                                if UNSAVED.lock().is_ok_and(|u| u.as_ref().is_some_and(|(prev, _)| *prev != id)) {
+                                    flush_preview();
+                                }
+                                if let (Ok(mut u), Some(bmp)) = (UNSAVED.lock(), bmp) {
+                                    *u = Some((id.clone(), bmp));
+                                }
+                            }
+                            seq += 1;
+                            let mut st = state.lock().unwrap();
+                            st.preview_supported = Some(true);
+                            for p in st.previews.values_mut() {
+                                p.live = false;
+                            }
+                            st.previews.insert(id, Preview { width, height, rgba: Arc::new(rgba), seq, live: true });
+                            drop(st);
+                            repaint();
                         }
-                        st.previews.insert(id, Preview { width, height, rgba: Arc::new(rgba), seq, live: true });
-                        drop(st);
-                        repaint();
+                        None if to_tmp => {
+                            tmp_failures += 1;
+                            if tmp_failures >= 2 {
+                                eprintln!("preview: /tmp unreadable, capturing to the shared folder");
+                                to_tmp = false;
+                                continue;
+                            }
+                        }
+                        None => {}
                     }
                 }
                 Ok(v) => {
@@ -106,6 +161,12 @@ fn preview_loop(state: Shared, fps: Arc<AtomicU32>, repaint: impl Fn()) {
                     // SAFETY: geteuid has no preconditions.
                     if denied && !via_root && unsafe { libc::geteuid() } != 0 {
                         via_root = true; // the jailed app may not capture; root may
+                        continue;
+                    }
+                    if !denied && to_tmp {
+                        // The service may refuse a path outside its usual folders: the shared one.
+                        eprintln!("preview: {v}; capturing to the shared folder");
+                        to_tmp = false;
                         continue;
                     }
                     eprintln!("preview: {v}");
@@ -116,6 +177,9 @@ fn preview_loop(state: Shared, fps: Arc<AtomicU32>, repaint: impl Fn()) {
                         std::thread::sleep(Duration::from_millis(300));
                     }
                     via_root = false;
+                    to_tmp = true;
+                    tmp_failures = 0;
+                    logged = false;
                     state.lock().unwrap().preview_supported = None;
                     continue;
                 }
@@ -273,6 +337,7 @@ fn refresh(state: &Shared) {
         Ok(v) if v.get("returnValue").and_then(Value::as_bool) != Some(false) => {
             st.sources = parse_inputs(&v);
             st.error = None;
+            RAW.lock().unwrap().inputs = Some(v);
         }
         Ok(v) => st.error = Some(format!("Inputs: {}", v.get("errorText").and_then(Value::as_str).unwrap_or("refused"))),
         Err(e) => st.error = Some(format!("Inputs: {e}")),
@@ -292,8 +357,74 @@ fn foreground_of(v: &Value) -> Option<String> {
         .or_else(|| v.get("appId").and_then(Value::as_str).filter(|id| *id != super::APP_ID).map(str::to_string))
 }
 
+/// The last session's inputs, storage, home and Source key owner, shown at once
+/// on the next start while the TV is asked again (stale-while-revalidate).
+/// tmpfs, so a reboot clears it.
+const CACHE_PATH: &str = "/tmp/lg-c1-source.state.json";
+
+/// The TV's last answers, kept as they came for the cache (parsed again on load).
+#[derive(Default)]
+struct Raw {
+    inputs: Option<Value>,
+    storage: Option<Value>,
+    locale: Option<String>,
+}
+static RAW: std::sync::Mutex<Raw> = std::sync::Mutex::new(Raw { inputs: None, storage: None, locale: None });
+
+/// Written to a temporary file and renamed, so a reader never sees half of it.
+fn save_cache(state: &Shared) {
+    let cache = {
+        // Same order as `refresh`: state, then RAW.
+        let st = state.lock().unwrap();
+        let raw = RAW.lock().unwrap();
+        if st.error.is_some() || raw.inputs.is_none() {
+            return;
+        }
+        json!({
+            "inputs": raw.inputs,
+            "storage": raw.storage,
+            "home": st.home.as_ref().and_then(|h| h.device.clone()),
+            "keyOwner": [st.key_owner.code(), st.key_owner.detail()],
+            "locale": raw.locale,
+        })
+    };
+    let tmp = format!("{CACHE_PATH}.tmp");
+    if std::fs::write(&tmp, cache.to_string()).is_ok() {
+        let _ = std::fs::rename(&tmp, CACHE_PATH);
+    }
+}
+
+fn load_cache(state: &Shared) {
+    let Some(v) = std::fs::read(CACHE_PATH).ok().and_then(|b| serde_json::from_slice::<Value>(&b).ok()) else { return };
+    let Some(inputs) = v.get("inputs").filter(|i| i.is_object()) else { return };
+    let mut st = state.lock().unwrap();
+    st.sources = parse_inputs(inputs);
+    if let Some(storage) = v.get("storage").filter(|s| s.is_object()) {
+        st.storage = parse_storage(storage);
+    }
+    st.home = v.get("home").and_then(Value::as_str).map(Source::home);
+    let detail = v.pointer("/keyOwner/1").and_then(Value::as_str).unwrap_or("").to_string();
+    st.key_owner = match v.pointer("/keyOwner/0").and_then(Value::as_str).unwrap_or("") {
+        "lg" => KeyOwner::Lg,
+        "picker" => KeyOwner::Picker,
+        "other" => KeyOwner::Other(detail),
+        "broken" => KeyOwner::Broken(detail),
+        "unsupported" => KeyOwner::Unsupported,
+        _ => KeyOwner::Pending, // read again by the probe
+    };
+    st.loaded = true;
+    drop(st);
+    if let Some(locale) = v.get("locale").and_then(Value::as_str) {
+        crate::i18n::set_system_locale(locale);
+        RAW.lock().unwrap().locale = Some(locale.to_string());
+    }
+    super::trace("state loaded (cache)");
+}
+
 pub fn start(repaint: impl Fn() + Send + Sync + Clone + 'static) -> (Backend, JoinHandle<()>) {
     let state: Shared = Default::default();
+    // Shown at once: what the last session saw, while the TV is asked again.
+    load_cache(&state);
     let (tx, rx) = mpsc::channel::<Command>();
 
     let repaint_for_preview = repaint.clone();
@@ -302,6 +433,34 @@ pub fn start(repaint: impl Fn() + Send + Sync + Clone + 'static) -> (Backend, Jo
         .name("tv".into())
         .spawn(move || {
             let state = s.clone();
+            // The inputs first: they are what the picker shows.
+            refresh(&s);
+            save_cache(&s);
+            super::trace("state loaded (TV)");
+            repaint();
+
+            // Slower reads on their own thread: waking the screen, the home screen in
+            // use, who has the Source key, capture access.
+            {
+                let shared = state.clone();
+                let repaint = repaint.clone();
+                let _ = std::thread::Builder::new().name("probe".into()).spawn(move || {
+                    // Opened from the screen saver (or a blanked screen): wake the TV.
+                    wake_screen();
+                    let capture = super::capture::status();
+                    shared.lock().unwrap().capture_access = capture;
+                    let home = detect_home();
+                    let owner = super::takeover::detect();
+                    {
+                        let mut st = shared.lock().unwrap();
+                        st.home = Some(home);
+                        st.key_owner = owner;
+                    }
+                    repaint();
+                    save_cache(&shared);
+                });
+            }
+
             // The app in front, followed live; our own window is skipped.
             {
                 let shared = state.clone();
@@ -325,6 +484,15 @@ pub fn start(repaint: impl Fn() + Send + Sync + Clone + 'static) -> (Backend, Jo
                     }
                 }
             }
+            repaint();
+
+            // The TV's UI language, for the Automatic language setting.
+            if let Ok(v) = call("luna://com.webos.settingsservice/getSystemSettings", &json!({"keys": ["localeInfo"]})) {
+                if let Some(ui) = v.pointer("/settings/localeInfo/locales/UI").and_then(Value::as_str) {
+                    crate::i18n::set_system_locale(ui);
+                    RAW.lock().unwrap().locale = Some(ui.to_string());
+                }
+            }
 
             // USB sticks come and go: follow attachedstoragemanager live.
             {
@@ -338,6 +506,7 @@ pub fn start(repaint: impl Fn() + Send + Sync + Clone + 'static) -> (Backend, Jo
                     move |v| {
                         if v.get("devices").is_some() {
                             shared.lock().unwrap().storage = parse_storage(&v);
+                            RAW.lock().unwrap().storage = Some(v);
                             repaint();
                         }
                     },
@@ -346,26 +515,9 @@ pub fn start(repaint: impl Fn() + Send + Sync + Clone + 'static) -> (Backend, Jo
                     eprintln!("storage subscription: {e}");
                     if let Ok(v) = call("luna://com.webos.service.attachedstoragemanager/listDevices", &json!({"deviceType": ["usb", "dms"]})) {
                         state.lock().unwrap().storage = parse_storage(&v);
+                        RAW.lock().unwrap().storage = Some(v);
                     }
                 }
-            }
-
-            // Opened from the screen saver (or a blanked screen): wake the TV first.
-            wake_screen();
-            // The TV's UI language, for the Automatic language setting.
-            if let Ok(v) = call("luna://com.webos.settingsservice/getSystemSettings", &json!({"keys": ["localeInfo"]})) {
-                if let Some(ui) = v.pointer("/settings/localeInfo/locales/UI").and_then(Value::as_str) {
-                    crate::i18n::set_system_locale(ui);
-                }
-            }
-            refresh(&s);
-            s.lock().unwrap().capture_access = super::capture::status();
-            {
-                let home = detect_home();
-                let owner = super::takeover::detect();
-                let mut st = s.lock().unwrap();
-                st.home = Some(home);
-                st.key_owner = owner;
             }
             repaint();
             // Runs until the UI drops its sender, so a last Switch is always sent.
@@ -374,6 +526,7 @@ pub fn start(repaint: impl Fn() + Send + Sync + Clone + 'static) -> (Backend, Jo
                     Command::Refresh => {
                         refresh(&s);
                         s.lock().unwrap().key_owner = super::takeover::detect();
+                        save_cache(&s);
                     }
                     Command::CaptureAccess(on) => {
                         {
