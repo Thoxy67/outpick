@@ -243,3 +243,5 @@ options.cec_power_on = Turn the device on
 options.cec_power_off = Turn the device off
 picker.switching = → {name} in {n} s
 hint.switch_now = Switch now
+hint.choose_icon = Choose the icon
+icon_pick.title = Icon

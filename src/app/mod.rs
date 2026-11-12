@@ -88,6 +88,8 @@ enum Screen {
     Options { id: String, sel: usize },
     /// The four layouts as large cards; `sel` indexes `Layout::ALL`.
     StylePick { sel: usize },
+    /// Choosing source `id`'s icon in a grid; `sel` indexes `SourceIcon::ALL`.
+    IconPick { id: String, sel: usize },
     /// A screen in a 3×3 grid where the arrows move the panel; `sel` indexes `POSITION_GRID`.
     PositionPick { sel: usize },
     /// Moving the clock over the whole screen (the interface shown faded); `orig` is restored on Back.
@@ -121,6 +123,8 @@ pub struct App {
     /// Source pictures uploaded to the GPU, by source id, with the frame they hold.
     preview_tex: std::collections::HashMap<String, (u64, egui::TextureHandle)>,
     scroll: f32,
+    /// The Sources editor's order when a row was grabbed: Back puts it back.
+    grab_order: Option<Vec<String>>,
 }
 
 impl App {
@@ -146,6 +150,7 @@ impl App {
             last_key: 0.0,
             closing: None,
             scroll: 0.0,
+            grab_order: None,
             hits: Default::default(),
             last_click: f64::NEG_INFINITY,
             snap: true,
@@ -275,6 +280,7 @@ impl App {
                 Screen::Options { .. } => self.options_key(k, &st, now),
                 Screen::StylePick { .. } | Screen::PositionPick { .. } => self.pick_key(k, &ctx),
                 Screen::ClockPlace { .. } => self.clock_key(k),
+                Screen::IconPick { .. } => self.icon_key(k, &st),
             }
             if self.closing.is_some() {
                 break;
@@ -351,7 +357,7 @@ impl App {
                 }
             }
             (Some(Hit::OptionRow(i)), Screen::Options { sel, .. }) => *sel = i,
-            (Some(Hit::PickCell(i)), Screen::StylePick { sel } | Screen::PositionPick { sel }) => *sel = i,
+            (Some(Hit::PickCell(i)), Screen::StylePick { sel } | Screen::PositionPick { sel } | Screen::IconPick { sel, .. }) => *sel = i,
             (Some(Hit::SourceCell(r, c)), Screen::Sources { sel, col, grabbed }) if !*grabbed => {
                 *sel = r;
                 *col = c;
@@ -451,6 +457,7 @@ impl App {
             Screen::StylePick { sel } => self.draw_style_pick(ui, &p, screen, alpha, sel),
             Screen::PositionPick { sel } => self.draw_position_pick(ui, &p, screen, alpha, sel),
             Screen::ClockPlace { .. } => self.draw_clock_place(ui, &p, st, entries, screen, alpha),
+            Screen::IconPick { id, sel } => self.draw_icon_pick(ui, &p, st, screen, alpha, &id, sel),
         }
         // The clock, over everything but its own placing screen.
         if self.cfg.clock.show && !matches!(self.screen, Screen::ClockPlace { .. }) {
