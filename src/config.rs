@@ -377,7 +377,7 @@ impl Config {
     }
 
     pub fn clamp(&mut self) {
-        self.scale = self.scale.clamp(0.7, 1.5);
+        self.scale = self.scale.clamp(0.8, 1.5);
         self.panel_opacity = self.panel_opacity.clamp(0.4, 1.0);
         self.dim = self.dim.clamp(0.0, 0.8);
         self.auto_close_secs = self.auto_close_secs.min(120);

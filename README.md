@@ -113,8 +113,11 @@ chain (LG's filters left as they are), the app off the capture whitelist (other 
 
 ## Configure
 
-Everything is in **Customize**, by section: General, Appearance, Layout, What to show, Behaviour,
-Clock, Remote and Sources. The settings are kept in `/media/developer/outpick/config.json` (every
+Everything is in **Customize**: its first page lists seven sections (Appearance, Layout, Inputs,
+Previews, Clock, Remote, General), each with a summary of its settings; OK opens one, Back returns.
+Options that cannot apply are hidden (panel opacity without the panel, the clock's details while it
+is off). The Remote section has one switch per key (Source, Multikey) and the quick-switch delay;
+"Reset settings" keeps the inputs and the remote keys. The settings are kept in `/media/developer/outpick/config.json` (every
 field optional), which survives reinstalls.
 
 ## Releases

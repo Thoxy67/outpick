@@ -1,7 +1,7 @@
 //! The style and position pickers, and placing the clock.
 
 use super::entries::Entry;
-use super::settings::{Item, item_index};
+use super::settings::Item;
 use super::{App, Hit, Nav, Screen};
 use crate::config::{Layout, Position};
 use crate::i18n::t;
@@ -34,11 +34,11 @@ impl App {
             Nav::Down => c.y = (c.y + 0.015).min(1.0),
             Nav::Ok => {
                 self.persist();
-                self.screen = Screen::Settings { sel: item_index(Item::ClockPlace), confirm_reset: false };
+                self.screen = self.settings_at(Item::ClockPlace);
             }
             Nav::Back | Nav::Erase | Nav::Source => {
                 self.cfg.clock = orig;
-                self.screen = Screen::Settings { sel: item_index(Item::ClockPlace), confirm_reset: false };
+                self.screen = self.settings_at(Item::ClockPlace);
             }
             _ => {}
         }
@@ -68,7 +68,6 @@ impl App {
 
     /// Keys of the style and position pickers: arrows choose, OK keeps, Back cancels.
     pub(super) fn pick_key(&mut self, k: &Nav, ctx: &egui::Context) {
-        let back = |item| Screen::Settings { sel: item_index(item), confirm_reset: false };
         match self.screen.clone() {
             Screen::StylePick { mut sel } => {
                 let n = Layout::ALL.len();
@@ -79,11 +78,11 @@ impl App {
                         self.cfg.layout = Layout::ALL[sel];
                         self.retheme(ctx);
                         self.persist();
-                        self.screen = back(Item::Layout);
+                        self.screen = self.settings_at(Item::Layout);
                         return;
                     }
                     Nav::Back | Nav::Erase | Nav::Source => {
-                        self.screen = back(Item::Layout);
+                        self.screen = self.settings_at(Item::Layout);
                         return;
                     }
                     _ => {}
@@ -102,11 +101,11 @@ impl App {
                         self.cfg.position = POSITION_GRID[sel];
                         self.retheme(ctx);
                         self.persist();
-                        self.screen = back(Item::Position);
+                        self.screen = self.settings_at(Item::Position);
                         return;
                     }
                     Nav::Back | Nav::Erase | Nav::Source => {
-                        self.screen = back(Item::Position);
+                        self.screen = self.settings_at(Item::Position);
                         return;
                     }
                     _ => {}

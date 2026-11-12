@@ -80,7 +80,10 @@ pub enum Outcome {
 #[derive(Clone, Debug, PartialEq)]
 enum Screen {
     Picker,
+    /// Customize's root page: one row per section; `sel` indexes the sections.
     Settings { sel: usize, confirm_reset: bool },
+    /// A section of Customize; `sel` indexes the options it shows now.
+    SettingsPage { page: usize, sel: usize, confirm_reset: bool },
     Sources { sel: usize, col: usize, grabbed: bool },
     /// Renaming source `id`; returns to the Sources row `sel`.
     Rename { id: String, sel: usize, text: String, tv_name: String, from_options: bool },
@@ -268,7 +271,7 @@ impl App {
             refresh(self, &mut entries, &mut built_for);
             match self.screen {
                 Screen::Picker => self.picker_key(k, &entries, now),
-                Screen::Settings { .. } => self.settings_key(k, &ctx, &st),
+                Screen::Settings { .. } | Screen::SettingsPage { .. } => self.settings_key(k, &ctx, &st),
                 Screen::Sources { .. } => self.sources_key(k, &st),
                 Screen::Rename { .. } => self.rename_key(k),
                 Screen::Options { .. } => self.options_key(k, &st, now),
@@ -339,7 +342,10 @@ impl App {
                     self.moved_since_open = true;
                 }
             }
-            (Some(Hit::SettingRow(i) | Hit::SettingPrev(i) | Hit::SettingNext(i)), Screen::Settings { sel, confirm_reset }) => {
+            (
+                Some(Hit::SettingRow(i) | Hit::SettingPrev(i) | Hit::SettingNext(i)),
+                Screen::Settings { sel, confirm_reset } | Screen::SettingsPage { sel, confirm_reset, .. },
+            ) => {
                 if *sel != i {
                     *sel = i;
                     *confirm_reset = false;
@@ -439,7 +445,8 @@ impl App {
                 }
                 self.draw_picker(ui, &p, st, entries, screen, offset, alpha);
             }
-            Screen::Settings { sel, confirm_reset } => self.draw_settings(ui, &p, st, screen, offset, alpha, sel, confirm_reset),
+            Screen::Settings { sel, confirm_reset } => self.draw_settings(ui, &p, st, screen, offset, alpha, None, sel, confirm_reset),
+            Screen::SettingsPage { page, sel, confirm_reset } => self.draw_settings(ui, &p, st, screen, offset, alpha, Some(page), sel, confirm_reset),
             Screen::Sources { sel, col, grabbed } => self.draw_sources(ui, &p, st, screen, offset, alpha, sel, col, grabbed),
             Screen::Rename { text, tv_name, .. } => self.draw_rename(ui, &p, screen, offset, alpha, &text, &tv_name),
             Screen::Options { id, sel } => self.draw_options(ui, &p, st, screen, offset, alpha, &id, sel),

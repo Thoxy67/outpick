@@ -1,7 +1,7 @@
 //! The Sources editor (show, icon, rename, order) and the rename field.
 
 use super::options::{OPTIONS, OptAction};
-use super::settings::{Item, item_index};
+use super::settings::Item;
 use super::widgets::{cycle, fit, keep_visible, text_width};
 use super::{App, Hit, Nav, Screen};
 use crate::i18n::{t, tf};
@@ -22,7 +22,7 @@ impl App {
         let Screen::Sources { mut sel, mut col, mut grabbed } = self.screen else { return };
         let all = self.all_entries(st);
         let n = all.len();
-        let back_to_settings = Screen::Settings { sel: item_index(Item::Sources), confirm_reset: false };
+        let back_to_settings = self.settings_at(Item::Sources);
         if n == 0 {
             if matches!(k, Nav::Back | Nav::Erase) {
                 self.screen = back_to_settings;
