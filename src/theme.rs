@@ -399,6 +399,8 @@ pub const SEMIBOLD: &str = "semibold";
 pub fn regular(size: f32) -> FontId {
     FontId::proportional(size)
 }
+/// The in-between weight (row labels and values, the rename field, the clock's seconds and
+/// am/pm). Inter Medium is not shipped (one ~40 KiB weight less): it draws with SemiBold.
 pub fn medium(size: f32) -> FontId {
     FontId::new(size, FontFamily::Name(MEDIUM.into()))
 }
@@ -409,9 +411,8 @@ pub fn semibold(size: f32) -> FontId {
 /// Inter first in every family, egui's defaults kept behind it for symbols and emoji.
 pub fn install_fonts(ctx: &egui::Context) {
     let mut defs = FontDefinitions::default();
-    let fonts: [(&str, &'static [u8]); 3] = [
+    let fonts: [(&str, &'static [u8]); 2] = [
         ("Inter-Regular", include_bytes!("../assets/fonts/Inter-Regular.subset.ttf")),
-        ("Inter-Medium", include_bytes!("../assets/fonts/Inter-Medium.subset.ttf")),
         ("Inter-SemiBold", include_bytes!("../assets/fonts/Inter-SemiBold.subset.ttf")),
     ];
     for (name, bytes) in fonts {
@@ -424,7 +425,7 @@ pub fn install_fonts(ctx: &egui::Context) {
         v
     };
     defs.families.insert(FontFamily::Proportional, family("Inter-Regular"));
-    defs.families.insert(FontFamily::Name(MEDIUM.into()), family("Inter-Medium"));
+    defs.families.insert(FontFamily::Name(MEDIUM.into()), family("Inter-SemiBold"));
     defs.families.insert(FontFamily::Name(SEMIBOLD.into()), family("Inter-SemiBold"));
     ctx.set_fonts(defs);
 }
