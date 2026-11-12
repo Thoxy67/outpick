@@ -17,7 +17,7 @@ PRE=false
 API="${FORGEJO_URL%/}/api/v1/repos/$FORGEJO_REPO"
 AUTH=(-H "Authorization: token $FORGEJO_TOKEN")
 VERSION="${TAG#v}"
-NAME="${RELEASE_NAME:-Inlet} $VERSION"
+NAME="${RELEASE_NAME:-Inputs} $VERSION"
 
 json() { python3 -c 'import json,sys; print(json.dumps(sys.stdin.read()))'; }
 

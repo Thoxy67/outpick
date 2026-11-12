@@ -3,6 +3,7 @@ name = "lg-c1-source"
 version = "0.1.0"
 edition = "2024"
 license = "MIT"
+readme = "README.md"
 description = "A modern, customizable native source/input picker overlay for rooted LG webOS TVs"
 
 [[bin]]
