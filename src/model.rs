@@ -177,7 +177,7 @@ pub fn detect_icon(h: &DeviceHints, kind: SourceKind) -> SourceIcon {
     //    "PC general" source type, a graphics maker, or LG's PC icon / a "PC" label.
     if matches!(h.cec_vendor, Some(0x001582)) || any(&cec, &["kodi", "libcec", "pulse-eight"])
         || low(&h.spd_type).contains("pc")
-        || any(&spd, &["nvidia", "geforce", "amd", "radeon", "intel", "ati technologies"])
+        || w_has(&words(&spd), &["nvidia", "geforce", "amd", "radeon", "intel", "ati"])
         || w_has(&all_w, &["pc", "computer", "ordinateur", "laptop", "windows", "steam"])
         || any(&low(&h.lg_icon), &["pc", "computer", "laptop"])
     {

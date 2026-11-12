@@ -77,7 +77,7 @@ export async function prepareWebosRuntime() {
   await fs.mkdir(pkgconfig, { recursive: true });
   await fs.writeFile(
     path.join(pkgconfig, 'sdl2.pc'),
-    `prefix=${directory}
+    `prefix=\${pcfiledir}/..
 libdir=\${prefix}/lib
 includedir=\${prefix}/include/SDL2
 Name: sdl2

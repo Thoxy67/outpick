@@ -354,7 +354,7 @@ impl Config {
             #[cfg(unix)]
             {
                 use std::os::unix::fs::PermissionsExt;
-                let _ = std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o777));
+                let _ = std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o1777));
             }
         }
         let tmp = path.with_extension("json.tmp");

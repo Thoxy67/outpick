@@ -12,7 +12,7 @@ node "$ROOT/tools/webos-runtime.mjs"
 export CARGO_TARGET_ARMV7_UNKNOWN_LINUX_GNUEABI_LINKER="$CC"
 # Size first (it runs on a TV): no panic locations, dead sections dropped,
 # only the libraries actually used linked in.
-export CARGO_TARGET_ARMV7_UNKNOWN_LINUX_GNUEABI_RUSTFLAGS="-C target-cpu=cortex-a9 -C target-feature=-neon,-soft-float,+thumb-mode -C link-arg=--sysroot=$SYSROOT -C link-arg=-Wl,-rpath,\$ORIGIN/lib -Zlocation-detail=none -Zfmt-debug=none -Zunstable-options -Cpanic=immediate-abort -C link-arg=-Wl,--gc-sections -C link-arg=-Wl,--as-needed -C link-arg=-Wl,-O1"
+export CARGO_TARGET_ARMV7_UNKNOWN_LINUX_GNUEABI_RUSTFLAGS="-C target-cpu=cortex-a9 -C target-feature=-neon,-soft-float,+thumb-mode -C link-arg=--sysroot=$SYSROOT -C link-arg=-Wl,-rpath,\$ORIGIN/lib -Zlocation-detail=none -Zfmt-debug=none -Zunstable-options -Cpanic=immediate-abort -C link-arg=-Wl,--gc-sections -C link-arg=-Wl,--as-needed -C link-arg=-Wl,-O1 -C link-arg=-Wl,-z,max-page-size=4096"
 export CC_armv7_unknown_linux_gnueabi="$CC"
 export AR_armv7_unknown_linux_gnueabi="$WEBOS_NDK/bin/arm-webos-linux-gnueabi-ar"
 export CFLAGS_armv7_unknown_linux_gnueabi="--sysroot=$SYSROOT"
