@@ -21,11 +21,15 @@
 - **CEC options per input**: power the device on or off, open its home screen, menu or info.
 - **Everything in one list**: Live TV, USB storage, DLNA media servers, and a Home entry that
   follows the home in use (LG, [Luma](https://github.com/ecklf/lg-luma) or Glasshouse Home).
-- **Yours to shape**: row, grid, list or docked sidebar; nine positions; eight themes and accent
-  colours; sizes, opacity, corners, icons; rename, hide and reorder sources; French and English.
+- **Yours to shape**: row, grid, list or docked sidebar; nine positions; eight themes and eleven
+  accent colours; sizes, opacity, corners, icons; rename, hide and reorder sources; French and
+  English.
+- **An on-screen clock** in seven styles, placed anywhere on the screen.
 - **The remote's Source key opens it** (and, on remotes without one, a short press on Multikey,
   a long press staying LG's accessibility), reversible from its own settings.
-- **Small**: a 2.1 MB binary (Thumb-2, size-optimised standard library, fonts and icons trimmed).
+- **Quick switch**: pressing Source again while the picker is open moves to the next input, and
+  the TV switches to it after a countdown (1 to 10 s, set in Customize → Remote).
+- **Small**: a 1.9 MB binary (Thumb-2, size-optimised standard library, fonts and icons trimmed).
 
 ## Tested TVs
 
@@ -43,10 +47,19 @@ webOS 11 (native filters) is not supported yet.
 Add this repository to the Homebrew Channel (Settings → Repositories), then install **Inputs**:
 
 ```
-https://git.thoxy.xyz/api/packages/thoxy/generic/lg-c1-source/latest/repo.json
+https://git.thoxy.xyz/thoxy/lg-c1-source/raw/branch/hbc/repo.json
 ```
 
 Each release then shows up as an update. Every release also carries the `.ipk` to install by hand.
+The picker itself runs without root; root (a rooted TV with the Homebrew Channel) is needed for the
+Source key takeover, the video previews on webOS 6 and the settings-folder permission fix.
+
+An earlier address, `…/api/packages/thoxy/generic/lg-c1-source/latest/repo.json`, is still updated
+for one more release; replace it with the one above.
+
+**Before uninstalling**, give the keys back: turn them off in Customize → Remote, or run
+`source-picker --uninstall` as root. If the app is removed without that, a boot hook puts LG's
+Source key back at the next start.
 
 ## Build
 
@@ -81,7 +94,7 @@ source-picker --capture-access on|off|status  # webOS 6: allow the video preview
 ## Configure
 
 Everything is in **Customize**, by section: General, Appearance, Layout, What to show, Behaviour,
-Remote and Sources. The settings are kept in `/media/developer/lg-c1-source/config.json` (every
+Clock, Remote and Sources. The settings are kept in `/media/developer/lg-c1-source/config.json` (every
 field optional), which survives reinstalls.
 
 ## Releases
@@ -90,12 +103,15 @@ field optional), which survives reinstalls.
 tag, commits and tags; `git push && git push origin vX.Y.Z` then runs
 [`.forgejo/workflows/release.yml`](.forgejo/workflows/release.yml). It builds, packages, writes the
 release notes and the Homebrew Channel `repo.json` automatically, publishes the Forgejo release,
-and updates the repository URL above. [`.forgejo/workflows/ci.yml`](.forgejo/workflows/ci.yml)
-builds every push to `main`.
+and commits the feed to the orphan branch `hbc` (the repository URL above; its links point at the
+tagged release). [`.forgejo/workflows/ci.yml`](.forgejo/workflows/ci.yml) builds every push to
+`main` and checks that packaging twice gives the same `.ipk`: `tools/package.py` is reproducible
+(timestamps from `SOURCE_DATE_EPOCH`, else the last commit).
 
 Repository settings: variable `FORGEJO_RUNNER` (runner label, default `docker`); secret
-`FORGEJO_TOKEN` (`write:repository`, `write:package`) if the job's own token cannot publish
-packages.
+`FORGEJO_TOKEN` (`write:repository`) only if the job's own token cannot publish releases. The
+job's token pushes the `hbc` branch. (The old generic-package feed, kept one more release, also
+needs `write:package`; that step may fail without stopping the release.)
 
 ## License
 
