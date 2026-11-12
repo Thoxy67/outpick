@@ -54,7 +54,7 @@ impl App {
 
     /// Text on the panel, or shadowed white on the picture when there is no panel.
     #[allow(clippy::too_many_arguments)]
-    fn label(&self, p: &egui::Painter, at: Pos2, anchor: Align2, text: &str, font: egui::FontId, color: Color32, dim: bool, alpha: f32) -> Rect {
+    pub(super) fn label(&self, p: &egui::Painter, at: Pos2, anchor: Align2, text: &str, font: egui::FontId, color: Color32, dim: bool, alpha: f32) -> Rect {
         if self.bare() {
             let white = if dim { Color32::from_white_alpha(210) } else { Color32::WHITE };
             crate::clock::shadowed(p, at, anchor, text, font, white, alpha)

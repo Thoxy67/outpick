@@ -13,9 +13,13 @@ use egui::{Align2, Color32, Pos2, Rect, Stroke, StrokeKind, Ui, Vec2, pos2, vec2
 impl App {
     pub(super) fn picker_key(&mut self, k: &Nav, entries: &[Entry], now: f64) {
         let n = entries.len() + usize::from(self.cfg.show_customize_tile);
-        if n == 0 {
-            if matches!(k, Nav::Back | Nav::Erase | Nav::Ok) {
-                self.close(now);
+        // Nothing to pick (or the inputs could not be read): OK opens Customize.
+        let empty = self.backend.state.lock().map(|st| empty_state(&st, entries)).unwrap_or(false);
+        if empty || n == 0 {
+            match k {
+                Nav::Ok => self.open_customize(),
+                Nav::Back | Nav::Erase => self.close(now),
+                _ => {}
             }
             return;
         }
@@ -60,6 +64,12 @@ impl App {
             Nav::Up if list => self.sel = (self.sel + n - 1) % n,
             Nav::Down if list => self.sel = (self.sel + 1) % n,
             Nav::Up if grid && self.sel >= cols => self.sel -= cols,
+            // The arrow that leads nowhere in this layout opens Customize (not while a quick
+            // switch counts down: an arrow cancels that first).
+            Nav::Up | Nav::Left if *k == self.customize_nav() && self.armed_at.is_none() => {
+                self.open_customize();
+                return;
+            }
             Nav::Down if grid && self.sel + cols < n => self.sel += cols,
             Nav::Down if grid && self.sel / cols < (n - 1) / cols => self.sel = n - 1,
             Nav::Ok => self.activate_selected(entries, now),
@@ -131,10 +141,21 @@ impl App {
         (e.source.kind == SourceKind::Hdmi && e.source.connected && e.source.cec).then(|| e.source.id.clone())
     }
 
+    /// The arrow that moves nowhere in this layout, which opens Customize: Up in a row or on
+    /// a grid's first row, Left in a list.
+    fn customize_nav(&self) -> Nav {
+        if vertical(self.cfg.layout) { Nav::Left } else { Nav::Up }
+    }
+
+    /// Opens Customize. The one place the picker builds the Settings screen.
+    pub(super) fn open_customize(&mut self) {
+        self.screen = Screen::Settings { sel: 0, confirm_reset: false };
+        self.moved_since_open = false;
+    }
+
     pub(super) fn activate_selected(&mut self, entries: &[Entry], now: f64) {
         if self.sel >= entries.len() {
-            self.screen = Screen::Settings { sel: 0, confirm_reset: false };
-            self.moved_since_open = false;
+            self.open_customize();
             return;
         }
         let e = &entries[self.sel];
@@ -210,6 +231,8 @@ impl App {
         }
 
         // Lay tiles out, scrolling to keep the selection in view.
+        let empty = empty_state(st, entries);
+        let n = if empty { 0 } else { n };
         let area = Rect::from_min_max(pos2(rect.min.x + pad, rect.min.y + head), pos2(rect.max.x - pad, rect.max.y - foot - 8.0 * s));
         // A list's rows span the panel, however wide its hints made it.
         if vertical(self.cfg.layout) {
@@ -349,6 +372,22 @@ impl App {
             }
         }
 
+        if empty {
+            // Nothing to show: say why, and the way to Customize.
+            let line1 = st.error.as_ref().map(|e| tf("error.inputs", &[("error", e)])).unwrap_or_else(|| t("picker.empty").to_string());
+            let c = area.center();
+            let f1 = semibold(22.0 * s);
+            self.label(p, pos2(c.x, c.y - 16.0 * s), Align2::CENTER_CENTER, &fit(p, &line1, f1.clone(), area.width()), f1, k.text, false, alpha);
+            self.label(p, pos2(c.x, c.y + 18.0 * s), Align2::CENTER_CENTER, t("picker.empty_hint"), regular(18.0 * s), k.text_dim, true, alpha);
+            if self.cfg.show_hints {
+                self.footer(p, rect, &[(t("key.ok"), t("picker.customize")), (t("key.back"), t("hint.close"))], alpha);
+            }
+            if st.loaded {
+                self.snap = false;
+            }
+            return;
+        }
+
         let mv = match self.cfg.layout {
             Layout::Grid => "◀ ▲ ▼ ▶",
             l if vertical(l) => "▲ ▼",
@@ -363,6 +402,10 @@ impl App {
             // Only on an HDMI input with a device behind it: its CEC options.
             if self.selected_hdmi(entries).is_some() {
                 hints.push((if vertical(self.cfg.layout) { "▶" } else { "▼" }, t("hint.cec_options")));
+            }
+            // Without the Customize tile, the arrow that opens it.
+            if !self.cfg.show_customize_tile {
+                hints.push((if vertical(self.cfg.layout) { "◀" } else { "▲" }, t("picker.customize")));
             }
             hints.push((t("key.back"), t("hint.close")));
             self.footer(p, rect, &hints, alpha);
@@ -465,4 +508,10 @@ impl App {
         p.circle_filled(pos2(r.min.x + 11.0 * s, r.center().y), 3.5 * s, veil(ink, alpha));
         p.text(pos2(r.min.x + 18.0 * s, r.center().y), Align2::LEFT_CENTER, label, f, veil(ink, alpha));
     }
+
+}
+
+/// The picker has nothing to offer: no entries once loaded, or the inputs could not be read.
+fn empty_state(st: &TvState, entries: &[Entry]) -> bool {
+    st.error.is_some() || (st.loaded && entries.is_empty())
 }

@@ -245,3 +245,5 @@ picker.switching = → {name} in {n} s
 hint.switch_now = Switch now
 hint.choose_icon = Choose the icon
 icon_pick.title = Icon
+picker.empty = No inputs to show
+picker.empty_hint = OK: Customize
