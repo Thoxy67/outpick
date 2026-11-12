@@ -156,7 +156,7 @@ impl App {
                 tile_w = fit_w.max(160.0 * s);
             }
         }
-        let (tile, gap, cols, rows) = match self.cfg.layout {
+        let (mut tile, gap, cols, rows) = match self.cfg.layout {
             Layout::Row => (vec2(tile_w, 196.0 * s), 18.0 * s, n.max(1), 1),
             Layout::Grid => {
                 let c = grid_cols(n);
@@ -168,7 +168,7 @@ impl App {
         // In a list, the selected row pushes its neighbours apart so its ring never
         // touches them: rows above stay, it moves one step down, rows below two.
         let push = if vertical(self.cfg.layout) { 9.0 * s } else { 0.0 };
-        let content = vec2(
+        let mut content = vec2(
             cols as f32 * tile.x + cols.saturating_sub(1) as f32 * gap,
             rows as f32 * tile.y + rows.saturating_sub(1) as f32 * gap + 2.0 * push,
         );
@@ -198,6 +198,11 @@ impl App {
 
         // Lay tiles out, scrolling to keep the selection in view.
         let area = Rect::from_min_max(pos2(rect.min.x + pad, rect.min.y + head), pos2(rect.max.x - pad, rect.max.y - foot - 8.0 * s));
+        // A list's rows span the panel, however wide its hints made it.
+        if vertical(self.cfg.layout) {
+            tile.x = area.width();
+            content.x = tile.x;
+        }
         let cell = |i: usize| -> Rect {
             let (c, r) = (i % cols, i / cols);
             Rect::from_min_size(pos2(area.min.x + c as f32 * (tile.x + gap), area.min.y + r as f32 * (tile.y + gap)), tile)
