@@ -20,7 +20,9 @@ export PKG_CONFIG_ALLOW_CROSS=1
 export PKG_CONFIG_PATH=
 export PKG_CONFIG_SYSROOT_DIR=/
 export PKG_CONFIG_LIBDIR="$ROOT/.build/sdl-webos/pkgconfig"
-# The standard library is rebuilt with the same size settings, and panics abort
-# at once without formatting messages (nightly).
+# The standard library is rebuilt with the same size settings and its
+# optimize_for_size feature (smaller algorithms, no backtrace support), and panics
+# abort at once without formatting messages (nightly). opt-level "z" for the
+# dependencies was tried and came out larger than "s" (2 033 584 vs 1 968 060 bytes).
 exec cargo build --manifest-path "$ROOT/Cargo.toml" --target armv7-unknown-linux-gnueabi --no-default-features --features webos --release \
-  -Z build-std=std,panic_abort "$@"
+  -Z build-std=std,panic_abort -Z build-std-features=optimize_for_size "$@"
