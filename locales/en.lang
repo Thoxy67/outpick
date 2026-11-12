@@ -47,6 +47,12 @@ value.plugged = Plugged in
 value.unplugged = Unplugged
 value.present = Present
 value.absent = None
+hint.adjust = Adjust
+hint.toggle_onoff = Turn on / off
+hint.open = Open
+settings.reset_button = Reset
+settings.reset_confirm_button = Confirm
+settings.restore_button = Give back to LG
 key.ok = OK
 key.back = BACK
 

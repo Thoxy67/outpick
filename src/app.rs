@@ -156,8 +156,44 @@ fn items() -> Vec<Item> {
     SECTIONS.iter().flat_map(|(_, items)| items.iter().copied()).collect()
 }
 
+fn row_kind_of(item: Item, cfg: &Config) -> RowKind {
+    match item {
+        Item::Size => RowKind::Slider(0.7, 1.5),
+        Item::Opacity => RowKind::Slider(0.4, 1.0),
+        Item::Dim => RowKind::Slider(0.0, 0.8),
+        Item::Animations => RowKind::Toggle(cfg.animations),
+        Item::ShowIcons => RowKind::Toggle(cfg.show_icons),
+        Item::ShowHeader => RowKind::Toggle(cfg.show_header),
+        Item::ShowHints => RowKind::Toggle(cfg.show_hints),
+        Item::ShowHome => RowKind::Toggle(cfg.show_home),
+        Item::ShowDisconnected => RowKind::Toggle(cfg.show_disconnected),
+        Item::ShowDevices => RowKind::Toggle(cfg.show_device_names),
+        Item::ShowLiveTv => RowKind::Toggle(cfg.show_live_tv),
+        Item::ShowUsb => RowKind::Toggle(cfg.show_usb),
+        Item::ShowMediaServers => RowKind::Toggle(cfg.show_media_servers),
+        Item::Sources => RowKind::Page,
+        Item::Reset | Item::RestoreLg => RowKind::Button,
+        _ => RowKind::Choice,
+    }
+}
+
 fn item_index(item: Item) -> usize {
     items().iter().position(|&i| i == item).unwrap_or(0)
+}
+
+/// How a Customize row is shown and used.
+#[derive(Clone, Copy, PartialEq)]
+enum RowKind {
+    /// ‹ value ›, changed with Left/Right (OK steps forward too).
+    Choice,
+    /// A gauge between two bounds, changed with Left/Right.
+    Slider(f32, f32),
+    /// An on/off switch, flipped with OK (or Left/Right).
+    Toggle(bool),
+    /// Opens another screen with OK.
+    Page,
+    /// Does something once with OK.
+    Button,
 }
 
 /// A drawn row of Customize: a section title, or option `n` of `items()`.
@@ -639,12 +675,17 @@ impl App {
                 confirm_reset = false;
             }
             Nav::Left | Nav::Right | Nav::Ok if all[sel] == Item::SourceKey => self.toggle_takeover(),
+            // Buttons and pages do nothing with Left/Right.
+            Nav::Left | Nav::Right if matches!(row_kind_of(all[sel], &self.cfg), RowKind::Button | RowKind::Page) => {}
             Nav::Left | Nav::Right => {
                 self.adjust(all[sel], if *k == Nav::Left { -1 } else { 1 });
                 self.retheme(ctx);
             }
             Nav::Ok if all[sel] == Item::RestoreLg => {
-                let _ = self.backend.commands.send(Command::Takeover(false));
+                let st = self.backend.state.lock().map(|s| s.clone()).unwrap_or_default();
+                if self.button_caption(Item::RestoreLg, false, &st).1 {
+                    let _ = self.backend.commands.send(Command::Takeover(false));
+                }
             }
             Nav::Ok => match all[sel] {
                 Item::Sources => {
@@ -1175,6 +1216,17 @@ impl App {
     }
 
     /// Icon, label and value of a Customize row.
+    /// The button's caption, and whether pressing it does anything now.
+    fn button_caption(&self, item: Item, confirm_reset: bool, st: &TvState) -> (&'static str, bool) {
+        match item {
+            Item::Reset => (t(if confirm_reset { "settings.reset_confirm_button" } else { "settings.reset_button" }), true),
+            _ => (
+                t("settings.restore_button"),
+                !st.takeover_busy && !matches!(st.key_owner, KeyOwner::Lg | KeyOwner::Unsupported),
+            ),
+        }
+    }
+
     fn owner_label(owner: &KeyOwner) -> String {
         match owner {
             KeyOwner::Picker => t("remote.this_picker").into(),
@@ -1307,35 +1359,107 @@ impl App {
             icons::paint(&clip, icon, ir, veil(if selected { k.accent_text } else { k.icon }, alpha));
             clip.text(pos2(r.min.x + 58.0 * s, r.center().y), Align2::LEFT_CENTER, label, medium(20.0 * s), veil(k.text, alpha));
 
-            let is_choice = !matches!(item, Item::Sources | Item::Reset | Item::RestoreLg);
             let chev = 22.0 * s;
-            let vfont = medium(19.0 * s);
-            let vw = text_width(p, &value, vfont.clone());
-            let vcol = if selected { k.accent_text } else { k.text_dim };
             let right = r.max.x - 14.0 * s;
-            // The value never moves: the right chevron's place is always kept.
-            let value_right = right - chev - 8.0 * s;
-            clip.text(pos2(value_right, r.center().y), Align2::RIGHT_CENTER, &value, vfont, veil(vcol, alpha));
-            let mut left_edge = value_right - vw;
-            if item == Item::Accent {
-                let sw = self.t.accent;
-                clip.circle_filled(pos2(left_edge - 18.0 * s, r.center().y), 8.0 * s, veil(sw, alpha));
-                left_edge -= 30.0 * s;
-            }
-            let cr = Rect::from_center_size(pos2(right - chev / 2.0, r.center().y), Vec2::splat(chev));
-            if is_choice && selected {
-                let cl = Rect::from_center_size(pos2(left_edge - 8.0 * s - chev / 2.0, r.center().y), Vec2::splat(chev));
-                icons::paint(&clip, "chevron-left", cl, veil(k.accent_text, alpha));
-                icons::paint(&clip, "chevron-right", cr, veil(k.accent_text, alpha));
-                // Generous targets: a pointer is less precise than a mouse.
-                self.add_hit(cl.expand(10.0 * s).intersect(area), Hit::SettingPrev(i));
-                self.add_hit(cr.expand(10.0 * s).intersect(area), Hit::SettingNext(i));
-            } else if !is_choice {
-                // Opens a page: a chevron always, like a menu entry.
-                icons::paint(&clip, "chevron-right", cr, veil(if selected { k.accent_text } else { k.text_faint }, alpha));
+            let vfont = medium(19.0 * s);
+            let vcol = if selected { k.accent_text } else { k.text_dim };
+            let cy = r.center().y;
+            // ‹ value › for rows changed with Left/Right; the right chevron's place is
+            // kept so the value never moves when the row is selected.
+            let arrows = |left_edge: f32| {
+                if selected {
+                    let cl = Rect::from_center_size(pos2(left_edge - 8.0 * s - chev / 2.0, cy), Vec2::splat(chev));
+                    let cr = Rect::from_center_size(pos2(right - chev / 2.0, cy), Vec2::splat(chev));
+                    icons::paint(&clip, "chevron-left", cl, veil(k.accent_text, alpha));
+                    icons::paint(&clip, "chevron-right", cr, veil(k.accent_text, alpha));
+                    // Generous targets: a pointer is less precise than a mouse.
+                    self.add_hit(cl.expand(10.0 * s).intersect(area), Hit::SettingPrev(i));
+                    self.add_hit(cr.expand(10.0 * s).intersect(area), Hit::SettingNext(i));
+                }
+            };
+            match row_kind_of(item, &self.cfg) {
+                RowKind::Choice => {
+                    let value_right = right - chev - 8.0 * s;
+                    let vw = text_width(p, &value, vfont.clone());
+                    clip.text(pos2(value_right, cy), Align2::RIGHT_CENTER, &value, vfont, veil(vcol, alpha));
+                    let mut left_edge = value_right - vw;
+                    if item == Item::Accent {
+                        clip.circle_filled(pos2(left_edge - 18.0 * s, cy), 8.0 * s, veil(self.t.accent, alpha));
+                        left_edge -= 30.0 * s;
+                    }
+                    arrows(left_edge);
+                }
+                RowKind::Slider(min, max) => {
+                    // A gauge with its value, adjusted with Left/Right.
+                    let v = match item {
+                        Item::Size => self.cfg.scale,
+                        Item::Opacity => self.cfg.panel_opacity,
+                        _ => self.cfg.dim,
+                    };
+                    let frac = ((v - min) / (max - min)).clamp(0.0, 1.0);
+                    let value_right = right - chev - 8.0 * s;
+                    let vw = 64.0 * s;
+                    clip.text(pos2(value_right, cy), Align2::RIGHT_CENTER, &value, vfont, veil(vcol, alpha));
+                    let track = Rect::from_min_max(pos2(value_right - vw - 160.0 * s, cy - 3.0 * s), pos2(value_right - vw, cy + 3.0 * s));
+                    let on = if selected { k.accent } else { k.text_dim };
+                    clip.rect_filled(track, 3.0 * s, veil(k.field_border, alpha));
+                    let fill = Rect::from_min_max(track.min, pos2(track.min.x + track.width() * frac, track.max.y));
+                    clip.rect_filled(fill, 3.0 * s, veil(on, alpha));
+                    clip.circle_filled(pos2(fill.max.x, cy), 8.0 * s, veil(on, alpha));
+                    arrows(track.min.x - 10.0 * s);
+                }
+                RowKind::Toggle(on) => {
+                    // A switch (Photocraft's toggle), eased between its two states.
+                    let fade = if self.cfg.animations { 0.15 } else { 0.0 };
+                    let t_on = ui.ctx().animate_bool_with_time(egui::Id::unique(("lg-source-switch", i)), on, fade);
+                    let sw = Rect::from_min_size(pos2(right - 52.0 * s, cy - 15.0 * s), vec2(52.0 * s, 30.0 * s));
+                    clip.rect_filled(sw, 15.0 * s, veil(mix(k.field_border, k.accent, t_on), alpha));
+                    let knob_x = sw.min.x + 15.0 * s + (sw.width() - 30.0 * s) * t_on;
+                    clip.circle_filled(pos2(knob_x, cy), 11.0 * s, veil(mix(k.text, ink_on(k.accent), t_on), alpha));
+                    clip.text(pos2(sw.min.x - 14.0 * s, cy), Align2::RIGHT_CENTER, &value, vfont, veil(vcol, alpha));
+                }
+                RowKind::Page => {
+                    clip.text(pos2(right - chev - 8.0 * s, cy), Align2::RIGHT_CENTER, &value, vfont, veil(vcol, alpha));
+                    let cr = Rect::from_center_size(pos2(right - chev / 2.0, cy), Vec2::splat(chev));
+                    icons::paint(&clip, "chevron-right", cr, veil(if selected { k.accent_text } else { k.text_faint }, alpha));
+                }
+                RowKind::Button => {
+                    // A real button: its action as the caption, a status on its left.
+                    let (caption, enabled) = self.button_caption(item, confirm_reset, st);
+                    let bf = semibold(17.0 * s);
+                    let bw = text_width(p, caption, bf.clone()) + 36.0 * s;
+                    let br = Rect::from_min_size(pos2(right - bw, cy - 17.0 * s), vec2(bw, 34.0 * s));
+                    let (fill, ink, stroke) = if !enabled {
+                        (Color32::TRANSPARENT, k.text_faint, k.field_border)
+                    } else if selected {
+                        (k.accent, ink_on(k.accent), k.accent)
+                    } else {
+                        (k.field, k.text, k.field_border)
+                    };
+                    clip.rect(br, 17.0 * s, veil(fill, alpha), Stroke::new(1.5 * s, veil(stroke, alpha)), StrokeKind::Inside);
+                    clip.text(br.center(), Align2::CENTER_CENTER, caption, bf, veil(ink, alpha));
+                    let label_end = r.min.x + 58.0 * s + text_width(p, label, medium(20.0 * s)) + 24.0 * s;
+                    let room = (br.min.x - 14.0 * s - label_end).max(0.0);
+                    clip.text(pos2(br.min.x - 14.0 * s, cy), Align2::RIGHT_CENTER, fit(p, &value, regular(16.5 * s), room), regular(16.5 * s), veil(k.text_faint, alpha));
+                }
             }
         }
-        self.footer(p, rect, &[("▲ ▼", t("hint.choose")), ("◀ ▶", t("hint.change")), (t("key.back"), t("hint.done"))], alpha);
+        // The hints say what the selected row's keys actually do.
+        let back = (t("key.back"), t("hint.done"));
+        let choose = ("▲ ▼", t("hint.choose"));
+        let hints: Vec<(&str, &str)> = match all.get(sel).map(|&it| (it, row_kind_of(it, &self.cfg))) {
+            Some((_, RowKind::Choice)) => vec![choose, ("◀ ▶", t("hint.change")), back],
+            Some((_, RowKind::Slider(..))) => vec![choose, ("◀ ▶", t("hint.adjust")), back],
+            Some((_, RowKind::Toggle(_))) => vec![choose, (t("key.ok"), t("hint.toggle_onoff")), back],
+            Some((_, RowKind::Page)) => vec![choose, (t("key.ok"), t("hint.open")), back],
+            Some((it, RowKind::Button)) => {
+                let (caption, enabled) = self.button_caption(it, confirm_reset, st);
+                if enabled { vec![choose, (t("key.ok"), caption), back] } else { vec![choose, back] }
+            }
+            None => vec![choose, back],
+        };
+        self.footer(p, rect, &hints, alpha);
+
     }
 
     #[allow(clippy::too_many_arguments)]
