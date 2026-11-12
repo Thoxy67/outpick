@@ -164,6 +164,7 @@ enum Item {
     ClockSeconds,
     ClockPlace,
     SourceKey,
+    SwitchDelay,
     MultikeyOpens,
     RestoreLg,
     Sources,
@@ -178,12 +179,9 @@ const SECTIONS: &[(&str, &[Item])] = &[
     ("section.content", &[Item::Naming, Item::ShowPreviews, Item::PreviewFps, Item::CaptureAccess, Item::ShowHome, Item::ShowDisconnected, Item::ShowDevices, Item::ShowLiveTv, Item::ShowUsb, Item::ShowMediaServers]),
     ("section.behaviour", &[Item::AutoClose]),
     ("section.clock", &[Item::ClockShow, Item::ClockStyle, Item::ClockSize, Item::Clock24h, Item::ClockSeconds, Item::ClockPlace]),
-    ("section.remote", &[Item::SourceKey, Item::MultikeyOpens, Item::RestoreLg]),
+    ("section.remote", &[Item::SourceKey, Item::SwitchDelay, Item::MultikeyOpens, Item::RestoreLg]),
     ("section.sources", &[Item::Sources, Item::Reset]),
 ];
-
-/// Seconds after the last Source press before the highlighted input is taken.
-const SOURCE_SWITCH_SECS: f64 = 3.0;
 
 /// The selectable options in order (the selection indexes this).
 fn items() -> Vec<Item> {
@@ -279,7 +277,7 @@ pub struct App {
     picked_initial: bool,
     moved_since_open: bool,
     /// Quick switch: Source pressed in the picker, so the highlighted input is
-    /// taken after `SOURCE_SWITCH_SECS` unless another key comes first.
+    /// taken after `switch_delay_secs` unless another key comes first.
     source_armed: bool,
     /// How much of that countdown is left (1 → 0), for the bar under the selection.
     switch_left: Option<(f32, u32)>,
@@ -524,7 +522,7 @@ impl App {
         if self.screen == Screen::Picker && self.closing.is_none() {
             let idle = now - self.last_key;
             if self.source_armed {
-                let total = SOURCE_SWITCH_SECS;
+                let total = self.cfg.switch_delay_secs as f64;
                 let left = total - idle;
                 if left <= 0.0 {
                     self.source_armed = false;
@@ -636,7 +634,7 @@ impl App {
                 }
             }
             // Source pressed again cycles the inputs (never Customize) and the
-            // highlighted one is taken after SOURCE_SWITCH_SECS, as on LG's picker.
+            // highlighted one is taken after `switch_delay_secs`, as on LG's picker.
             // The arrows never start this countdown: OK switches then.
             Nav::Source => {
                 let m = self.visible_entries(st).len().max(1);
@@ -1110,6 +1108,7 @@ impl App {
             Item::ShowUsb => c.show_usb = !c.show_usb,
             Item::ShowMediaServers => c.show_media_servers = !c.show_media_servers,
             Item::AutoClose => c.auto_close_secs = cycle(&[0, 5, 10, 15, 30, 60], c.auto_close_secs, dir),
+            Item::SwitchDelay => c.switch_delay_secs = cycle(&[1, 2, 3, 4, 5, 7, 10], c.switch_delay_secs, dir),
             Item::MultikeyOpens => c.multikey_opens = !c.multikey_opens,
             Item::Sources | Item::Reset | Item::SourceKey | Item::RestoreLg | Item::CaptureAccess => {}
         }
@@ -1742,6 +1741,7 @@ impl App {
             Item::ShowUsb => ("usb", t("settings.show_usb"), onoff(c.show_usb)),
             Item::ShowMediaServers => ("server", t("settings.show_media_servers"), onoff(c.show_media_servers)),
             Item::AutoClose => ("timer", t("settings.auto_close"), secs(c.auto_close_secs, "value.never")),
+            Item::SwitchDelay => ("timer", t("settings.switch_delay"), format!("{} s", c.switch_delay_secs)),
             Item::MultikeyOpens => ("menu", t("settings.multikey_opens"), onoff(c.multikey_opens)),
             Item::SourceKey => (
                 "tv",

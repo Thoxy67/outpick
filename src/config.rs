@@ -247,6 +247,9 @@ pub struct Config {
     pub show_customize_tile: bool,
     /// Close by itself after this many seconds without a key (0 = never).
     pub auto_close_secs: u32,
+    /// Source pressed again in the picker moves to the next input; it is taken
+    /// this many seconds after the last press (the arrows never start this).
+    pub switch_delay_secs: u32,
     /// The remote's Multikey (accessibility) button opens the picker too, for
     /// remotes with no Source button (with the Source key takeover on).
     pub multikey_opens: bool,
@@ -285,6 +288,7 @@ impl Default for Config {
             show_media_servers: false,
             show_customize_tile: true,
             auto_close_secs: 15,
+            switch_delay_secs: 3,
             animations: true,
             multikey_opens: false,
             order: Vec::new(),
@@ -366,6 +370,7 @@ impl Config {
         self.panel_opacity = self.panel_opacity.clamp(0.4, 1.0);
         self.dim = self.dim.clamp(0.0, 0.8);
         self.auto_close_secs = self.auto_close_secs.min(120);
+        self.switch_delay_secs = self.switch_delay_secs.clamp(1, 10);
         self.clock.x = self.clock.x.clamp(0.0, 1.0);
         self.clock.y = self.clock.y.clamp(0.0, 1.0);
         self.clock.size = self.clock.size.clamp(0.4, 3.0);

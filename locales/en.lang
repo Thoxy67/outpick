@@ -161,6 +161,7 @@ settings.dim = Dim picture
 settings.show_disconnected = Show unplugged inputs
 settings.show_devices = Show device names
 settings.show_live_tv = Show Live TV
+settings.switch_delay = Source key: switch after
 settings.auto_close = Close after
 settings.sources = Sources
 settings.sources_value = Rename, hide, reorder

@@ -154,7 +154,7 @@ impl eframe::App for Preview {
                     s.started = None;
                 } else {
                     let since = *s.started.get_or_insert(now);
-                    if now - since > 0.8 && !s.requested {
+                    if now - since > shot_delay() && !s.requested {
                         s.requested = true;
                         let path = s.path.clone();
                         let done = s.done.clone();
@@ -213,4 +213,9 @@ fn fake_picture(ui: &egui::Ui, r: egui::Rect) {
     mesh.add_triangle(0, 2, 3);
     p.add(egui::Shape::mesh(mesh));
     p.circle_filled(r.center() + egui::vec2(-r.width() * 0.2, -r.height() * 0.15), r.height() * 0.12, egui::Color32::from_rgb(250, 220, 150));
+}
+
+/// Seconds to wait after the last key before the screenshot (LG_SHOT_DELAY, default 0.8).
+fn shot_delay() -> f64 {
+    std::env::var("LG_SHOT_DELAY").ok().and_then(|v| v.parse().ok()).unwrap_or(0.8)
 }
