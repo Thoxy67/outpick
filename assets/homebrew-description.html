@@ -3,7 +3,8 @@
 <ul>
   <li>HDMI inputs named after the device plugged in (HDMI-CEC), with live previews of the source being watched and the last picture of the others.</li>
   <li>CEC options per input (power, device home, menu, info), USB storage and DLNA media servers, and a Home entry that follows Luma or Glasshouse Home.</li>
-  <li>Row, grid, list or docked sidebar layouts, nine positions, eight themes and accent colours, French and English.</li>
+  <li>Row, grid, list or docked sidebar layouts, nine positions, eight themes and eleven accent colours, an on-screen clock in seven styles, French and English.</li>
   <li>Optional takeover of the remote's Source key (and the Multikey button on remotes without one), reversible from the app's own settings.</li>
 </ul>
-<p>Requires root (Homebrew Channel). Open it once from the app list, then use <em>Customize</em>.</p>
+<p>The picker runs without root; the Source key takeover and the previews on webOS 6 need a rooted TV (Homebrew Channel). Open it once from the app list, then use <em>Customize</em>.</p>
+<p><strong>Before uninstalling</strong>, turn the keys off in <em>Customize → Remote</em> (or run <code>source-picker --uninstall</code> as root). Otherwise a boot hook gives the Source key back to LG at the next start.</p>
