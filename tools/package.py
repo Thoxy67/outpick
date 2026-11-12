@@ -10,7 +10,8 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 APP_ID = "com.thoxy.sourcepicker"
-VERSION = "0.1.0"
+# The version is Cargo.toml's (tools/release.sh sets it; the release workflow checks the tag).
+VERSION = next(l.split('"')[1] for l in (ROOT / "Cargo.toml").read_text().splitlines() if l.startswith("version = "))
 BIN = ROOT / "target/armv7-unknown-linux-gnueabi/release/source-picker"
 SDL = ROOT / ".build/sdl-webos/lib/libSDL2-2.0.so.0"
 
@@ -21,6 +22,7 @@ APPINFO = {
     "type": "native",
     "main": "source-picker",
     "title": "Inputs",
+    "appDescription": "A modern, customizable input picker for rooted LG webOS TVs: HDMI inputs with device names and live previews, CEC options, USB and media servers.",
     "icon": "icon.png",
     "largeIcon": "largeIcon.png",
     "iconColor": "#1A1A1C",

@@ -1,0 +1,58 @@
+# CI on Forgejo (Linux runner, jobs in Docker, as term's .forgejo/workflows/ci.yml): host tests,
+# then the real TV build (webOS NDK + SDL-webOS, size-optimised) and its .ipk, so a broken
+# cross build shows up before a tag does.
+#
+# Runner label: repository variable FORGEJO_RUNNER (default "docker").
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: "0"
+
+jobs:
+  tv:
+    runs-on: ${{ vars.FORGEJO_RUNNER || 'docker' }}
+    # Node for the JavaScript actions and the SDK scripts; Rust comes from rustup below
+    # (the pinned nightly in rust-toolchain.toml).
+    container:
+      image: node:22-bookworm
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - name: System packages
+        run: |
+          apt-get update -qq
+          apt-get install -y -qq --no-install-recommends build-essential pkg-config git curl ca-certificates \
+            python3 file xz-utils bzip2
+      - name: Rust (pinned nightly from rust-toolchain.toml)
+        run: |
+          curl -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain none
+          echo "$HOME/.cargo/bin" >>"$GITHUB_PATH"
+          "$HOME/.cargo/bin/rustup" toolchain install
+      - uses: actions/cache@v4
+        with:
+          path: |
+            .build
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: forgejo-tv-${{ hashFiles('Cargo.lock', 'rust-toolchain.toml', 'tools/setup-webos-sdk.mjs', 'tools/webos-runtime.mjs') }}
+          restore-keys: forgejo-tv-
+      - name: webOS SDK and SDL-webOS (pinned, cached)
+        run: node tools/setup-webos-sdk.mjs && node tools/webos-runtime.mjs
+      - name: Tests (host, no UI backend)
+        run: cargo test --no-default-features --locked
+      - name: TV build (armv7 soft-float, Thumb-2, size-optimised)
+        run: tools/build-webos.sh --locked
+      - name: Package
+        run: |
+          python3 tools/package.py
+          ls -l target/armv7-unknown-linux-gnueabi/release/source-picker dist/
+      - name: Release notes since the last tag (preview)
+        run: tools/release/changelog.py

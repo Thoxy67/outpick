@@ -1,0 +1,107 @@
+# Release on Forgejo: a pushed vX.Y.Z tag builds the TV app and publishes it as a Forgejo
+# release, with notes generated from the commits since the previous tag
+# (tools/release/changelog.py, as term's release workflow does it).
+#
+# Start one with `tools/release.sh X.Y.Z` (sets the version, writes CHANGELOG.md, commits and
+# tags), then `git push && git push origin vX.Y.Z`.
+#
+# The job's own token publishes the release (it may write releases of its repository). To use a
+# personal token instead, add a repository secret FORGEJO_TOKEN (scope write:repository).
+# Runner label: repository variable FORGEJO_RUNNER (default "docker").
+name: Release
+
+on:
+  push:
+    tags: ["v[0-9]*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing tag to (re)publish, e.g. v0.2.0"
+        required: true
+
+concurrency:
+  group: release-${{ inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: "0"
+
+jobs:
+  release:
+    runs-on: ${{ vars.FORGEJO_RUNNER || 'docker' }}
+    container:
+      image: node:22-bookworm
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+          # Full history and tags: the notes are the commits since the previous tag.
+          fetch-depth: 0
+      - name: System packages
+        run: |
+          apt-get update -qq
+          apt-get install -y -qq --no-install-recommends build-essential pkg-config git curl ca-certificates \
+            python3 file xz-utils bzip2
+      - name: Version
+        id: v
+        run: |
+          git config --global --add safe.directory "$PWD"
+          TAG="${{ inputs.tag || github.ref_name }}"
+          V="${TAG#v}"
+          CARGO_V="$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)"
+          if [ "$V" != "$CARGO_V" ]; then
+            echo "::error::tag $TAG but Cargo.toml says $CARGO_V (tools/release.sh keeps them in step)"
+            exit 1
+          fi
+          echo "tag=$TAG" >>"$GITHUB_OUTPUT"
+          case "$V" in *-*) echo "prerelease=--prerelease" >>"$GITHUB_OUTPUT" ;; *) echo "prerelease=" >>"$GITHUB_OUTPUT" ;; esac
+      - name: Rust (pinned nightly from rust-toolchain.toml)
+        run: |
+          curl -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain none
+          echo "$HOME/.cargo/bin" >>"$GITHUB_PATH"
+          "$HOME/.cargo/bin/rustup" toolchain install
+      - uses: actions/cache@v4
+        with:
+          path: |
+            .build
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: forgejo-tv-${{ hashFiles('Cargo.lock', 'rust-toolchain.toml', 'tools/setup-webos-sdk.mjs', 'tools/webos-runtime.mjs') }}
+          restore-keys: forgejo-tv-
+      - name: webOS SDK and SDL-webOS (pinned, cached)
+        run: node tools/setup-webos-sdk.mjs && node tools/webos-runtime.mjs
+      - name: TV build
+        run: tools/build-webos.sh --locked
+      - name: Package
+        run: |
+          python3 tools/package.py
+          mkdir -p dist/release
+          cp dist/*_arm.ipk dist/release/
+          ls -l dist/release
+      - name: Homebrew Channel feed (repo.json, manifest, description, icon)
+        env:
+          FORGEJO_URL: ${{ github.server_url }}
+          FORGEJO_REPO: ${{ github.repository }}
+        run: tools/release/repository.py "${{ steps.v.outputs.tag }}" dist/release
+      - name: Checksums
+        run: (cd dist/release && sha256sum * > SHA256SUMS && cat SHA256SUMS)
+      - name: Release notes
+        run: tools/release/changelog.py --to "${{ steps.v.outputs.tag }}" | tee notes.md
+      - name: Publish the Forgejo release
+        env:
+          FORGEJO_URL: ${{ github.server_url }}
+          FORGEJO_REPO: ${{ github.repository }}
+          FORGEJO_TOKEN: ${{ secrets.FORGEJO_TOKEN || github.token }}
+        run: tools/release/forgejo-release.sh "${{ steps.v.outputs.tag }}" dist/release notes.md ${{ steps.v.outputs.prerelease }}
+      # The feed under a fixed URL for the TVs' Homebrew Channel (not for pre-releases).
+      # Needs a token with write:package: set the FORGEJO_TOKEN secret if the job token lacks it.
+      - name: Publish the Homebrew Channel repository
+        if: steps.v.outputs.prerelease == ''
+        env:
+          FORGEJO_URL: ${{ github.server_url }}
+          FORGEJO_REPO: ${{ github.repository }}
+          FORGEJO_TOKEN: ${{ secrets.FORGEJO_TOKEN || github.token }}
+        run: tools/release/publish-repo.sh dist/release

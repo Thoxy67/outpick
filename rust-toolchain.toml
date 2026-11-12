@@ -1,0 +1,7 @@
+# Pinned nightly: the TV build uses -Z build-std and -C panic=immediate-abort (tools/build-webos.sh),
+# so CI and local builds must use the same compiler. Bump deliberately.
+[toolchain]
+channel = "nightly-2026-11-10"
+components = ["rust-src"]
+targets = ["armv7-unknown-linux-gnueabi"]
+profile = "minimal"
