@@ -48,7 +48,7 @@ fn main() {
         let scale = PX as f32 / size.width().max(size.height());
         let mut pixmap = resvg::tiny_skia::Pixmap::new(PX, PX).unwrap();
         resvg::render(&tree, resvg::tiny_skia::Transform::from_scale(scale, scale), &mut pixmap.as_mut());
-        let alpha: Vec<u8> = pixmap.data().chunks_exact(4).map(|p| p[3]).collect();
+        let alpha: Vec<u8> = pixmap.data().as_chunks::<4>().0.iter().map(|p| p[3]).collect();
         let file = Path::new(&out).join(format!("icon_{name}.rle"));
         fs::write(&file, rle(&alpha)).unwrap();
         writeln!(code, "    ({name:?}, include_bytes!(concat!(env!(\"OUT_DIR\"), \"/icon_{name}.rle\"))),").unwrap();

@@ -205,7 +205,7 @@ impl App {
         let sel_now = self.sel;
         let offsets: Vec<f32> = (0..n)
             .map(|i| {
-                let want = if push == 0.0 { 0.0 } else if i < sel_now { 0.0 } else if i == sel_now { push } else { 2.0 * push };
+                let want = if push == 0.0 || i < sel_now { 0.0 } else if i == sel_now { push } else { 2.0 * push };
                 self.anim(ui, &format!("push-{i}"), want, 0.16)
             })
             .collect();

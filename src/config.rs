@@ -4,7 +4,9 @@
 use crate::i18n::{Language, t};
 use crate::icons::SourceIcon;
 use crate::theme::{Accent, ThemeKind};
+use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
+use serde_json::{Map, Value};
 use std::path::PathBuf;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -208,6 +210,8 @@ pub struct SourceOverride {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Config {
+    /// File format version (1; files without one are version 1 too).
+    pub version: u32,
     pub language: Language,
     pub theme: ThemeKind,
     pub accent: Accent,
@@ -220,7 +224,7 @@ pub struct Config {
     pub show_header: bool,
     /// The key hints at the bottom.
     pub show_hints: bool,
-    /// Size of everything, 0.7 .. 1.5.
+    /// Size of everything, 0.8 .. 1.5.
     pub scale: f32,
     /// The panel behind the tiles (off: only the tiles, title and hints).
     pub show_panel: bool,
@@ -243,7 +247,8 @@ pub struct Config {
     pub show_usb: bool,
     /// DLNA/UPnP media servers on the network.
     pub show_media_servers: bool,
-    /// Show the Customize tile in the picker (settings stay reachable with the Source key held).
+    /// Show the Customize tile in the picker. It is the only way into the settings: with it
+    /// off, they are reached again only by setting this back to true in config.json.
     pub show_customize_tile: bool,
     /// Close by itself after this many seconds without a key (0 = never).
     pub auto_close_secs: u32,
@@ -266,6 +271,7 @@ pub struct Config {
 impl Default for Config {
     fn default() -> Self {
         Config {
+            version: 1,
             language: Language::Auto,
             theme: ThemeKind::Studio,
             accent: Accent::Theme,
@@ -327,13 +333,32 @@ impl Config {
                 .then(|| std::fs::read("/media/developer/lg-c1-source/config.json").ok())
                 .flatten()
         };
-        let mut c: Config = std::fs::read(&path)
-            .ok()
-            .or_else(legacy)
-            .and_then(|b| serde_json::from_slice(&b).map_err(|e| eprintln!("config: {e}; using defaults")).ok())
-            .unwrap_or_default();
+        let Some(bytes) = std::fs::read(&path).ok().or_else(legacy) else {
+            return Config::default();
+        };
+        match Self::from_json(&bytes) {
+            Ok(c) => c,
+            Err(e) => {
+                // Unreadable as a whole: keep the user's file aside, since the next save
+                // replaces it.
+                let bad = path.with_extension("json.bad");
+                let kept = std::fs::write(&bad, &bytes).map(|()| bad.display().to_string());
+                eprintln!("config: {e}; using defaults (file kept as {kept:?})");
+                Config::default()
+            }
+        }
+    }
+
+    /// A settings file, leniently: a value that does not fit (a typo, an unknown theme, a
+    /// wrong type) falls back to its default alone, and the rest is kept. Fails only when
+    /// the file is not a JSON object at all.
+    pub fn from_json(bytes: &[u8]) -> Result<Config, String> {
+        let v: Value = serde_json::from_slice(bytes).map_err(|e| e.to_string())?;
+        let Value::Object(user) = v else { return Err("not a JSON object".into()) };
+        let kept = serde_json::to_vec(&lenient::<Config>(user, "")).map_err(|e| e.to_string())?;
+        let mut c: Config = serde_json::from_slice(&kept).unwrap_or_default();
         c.clamp();
-        c
+        Ok(c)
     }
 
     pub fn save(&self) {
@@ -366,8 +391,15 @@ impl Config {
             }
         }
         let tmp = path.with_extension("json.tmp");
-        let bytes = serde_json::to_vec_pretty(self).map_err(|e| e.to_string())?;
-        std::fs::write(&tmp, bytes).map_err(|e| format!("{}: {e}", tmp.display()))?;
+        let bytes = serde_json::to_vec_pretty(&self.pruned()).map_err(|e| e.to_string())?;
+        {
+            use std::io::Write;
+            // On disk before the rename, so a power cut leaves the old file or the new one.
+            let err = |e: std::io::Error| format!("{}: {e}", tmp.display());
+            let mut f = std::fs::File::create(&tmp).map_err(err)?;
+            f.write_all(&bytes).map_err(err)?;
+            f.sync_all().map_err(err)?;
+        }
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
@@ -376,7 +408,32 @@ impl Config {
         std::fs::rename(&tmp, &path).map_err(|e| format!("{}: {e}", path.display()))
     }
 
+    /// As saved: without per-source entries that change nothing, and without empty or
+    /// repeated ids in the order.
+    fn pruned(&self) -> Config {
+        let mut c = self.clone();
+        c.sources.retain(|o| {
+            o.name.as_deref().is_some_and(|n| !n.trim().is_empty()) || o.icon != SourceIcon::Auto || o.hidden
+        });
+        let mut seen: Vec<String> = Vec::new();
+        c.order.retain(|id| {
+            let new = !id.is_empty() && !seen.contains(id);
+            if new {
+                seen.push(id.clone());
+            }
+            new
+        });
+        c
+    }
+
     pub fn clamp(&mut self) {
+        self.version = 1;
+        // The picker offers 1, 2 and 4 pictures a second: a hand-set value snaps to the nearest.
+        self.preview_fps = match self.preview_fps {
+            0..=1 => 1,
+            2..=3 => 2,
+            _ => 4,
+        };
         self.scale = self.scale.clamp(0.8, 1.5);
         self.panel_opacity = self.panel_opacity.clamp(0.4, 1.0);
         self.dim = self.dim.clamp(0.0, 0.8);
@@ -397,5 +454,170 @@ impl Config {
         }
         self.sources.push(SourceOverride { id: id.into(), ..Default::default() });
         self.sources.last_mut().unwrap()
+    }
+}
+
+/// `user` key by key, keeping only the keys that still let a `T` be read (a missing key
+/// takes its default, as `T` is `#[serde(default)]`; `path` names the object in the log).
+/// The arrays `order` and `sources` lose only their bad elements, and `clock` is taken key
+/// by key the same way.
+fn lenient<T: DeserializeOwned>(user: Map<String, Value>, path: &str) -> Value {
+    let mut out = Map::new();
+    for (k, v) in user {
+        let v = match (path, k.as_str(), v) {
+            ("", "clock", Value::Object(m)) => lenient::<ClockConfig>(m, "clock."),
+            ("", "order", Value::Array(a)) => elements::<String>(a, "order"),
+            ("", "sources", Value::Array(a)) => elements::<SourceOverride>(a, "sources"),
+            (_, _, v) => v,
+        };
+        out.insert(k.clone(), v);
+        if !reads_as::<T>(&out) {
+            eprintln!("config: {path}{k}: invalid value, using the default");
+            out.remove(&k);
+        }
+    }
+    Value::Object(out)
+}
+
+/// Whether `v` reads as a `T`. Through the text, not `T::deserialize(&Value)`: the TV build
+/// already holds the text deserializers of the settings types, and a second set reading
+/// from `Value` would cost it some 7 kB.
+fn reads_as<T: DeserializeOwned>(v: &impl Serialize) -> bool {
+    serde_json::to_vec(v).is_ok_and(|b| serde_json::from_slice::<T>(&b).is_ok())
+}
+
+/// The elements of an array that read as a `T`.
+fn elements<T: DeserializeOwned>(a: Vec<Value>, name: &str) -> Value {
+    let n = a.len();
+    let kept: Vec<Value> = a.into_iter().filter(|v| reads_as::<T>(v)).collect();
+    if kept.len() < n {
+        eprintln!("config: {name}: {} invalid entries dropped", n - kept.len());
+    }
+    Value::Array(kept)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The settings file of the LG C1, as an earlier build wrote it.
+    const C1_LEGACY: &str = r#"{"language":"auto","theme":"studio","accent":"theme","layout":"row","position":"bottom","corners":"theme","showIcons":true,"showHeader":true,"showHints":true,"scale":1.0,"panelOpacity":0.92,"dim":0.35,"showDisconnected":true,"showDeviceNames":true,"showLiveTv":true,"showHome":true,"showUsb":true,"showMediaServers":false,"showCustomizeTile":true,"autoCloseSecs":15,"autoSwitchSecs":0,"animations":true,"order":[],"sources":[]}"#;
+    /// The QNED's, hand-written.
+    const QNED_LEGACY: &str = r#"{"multikeyOpens": true}"#;
+
+    #[test]
+    fn legacy_files_load() {
+        let c1 = Config::from_json(C1_LEGACY.as_bytes()).unwrap();
+        assert_eq!(c1, Config::default());
+        let qned = Config::from_json(QNED_LEGACY.as_bytes()).unwrap();
+        assert_eq!(qned, Config { multikey_opens: true, ..Config::default() });
+    }
+
+    #[test]
+    fn one_bad_value_keeps_the_rest() {
+        let c = Config::from_json(
+            br#"{"theme":"no-such-theme","layout":"grid","scale":"big","dim":0.5,
+                 "clock":{"show":true,"style":"sundial","x":0.25},
+                 "order":["HDMI_2",7,"HDMI_1"],
+                 "sources":[{"id":"HDMI_1","name":"Box","icon":"teapot"},{"id":"HDMI_2","hidden":true},3]}"#,
+        )
+        .unwrap();
+        let d = Config::default();
+        assert_eq!(c.theme, d.theme);
+        assert_eq!(c.scale, d.scale);
+        assert_eq!(c.layout, Layout::Grid);
+        assert_eq!(c.dim, 0.5);
+        assert!(c.clock.show);
+        assert_eq!(c.clock.style, ClockStyle::Minimal);
+        assert_eq!(c.clock.x, 0.25);
+        assert_eq!(c.order, ["HDMI_2", "HDMI_1"]);
+        assert_eq!(c.sources, [SourceOverride { id: "HDMI_2".into(), hidden: true, ..Default::default() }]);
+        // A wrong type for an object or an array falls back as a whole.
+        let c = Config::from_json(br#"{"clock":5,"sources":{"a":1},"showHome":false}"#).unwrap();
+        assert_eq!(c, Config { show_home: false, ..Config::default() });
+    }
+
+    #[test]
+    fn not_an_object_is_an_error() {
+        assert!(Config::from_json(b"{\"theme\": \"studio\",").is_err());
+        assert!(Config::from_json(b"[1, 2]").is_err());
+        assert!(Config::from_json(b"").is_err());
+    }
+
+    #[test]
+    fn clamp_bounds_everything() {
+        let mut c = Config {
+            version: 7,
+            scale: 9.0,
+            panel_opacity: 0.0,
+            dim: -1.0,
+            auto_close_secs: 999,
+            switch_delay_secs: 0,
+            preview_fps: 3,
+            clock: ClockConfig { x: -2.0, y: 4.0, size: 10.0, ..Default::default() },
+            ..Config::default()
+        };
+        c.clamp();
+        assert_eq!(c.version, 1);
+        assert_eq!((c.scale, c.panel_opacity, c.dim), (1.5, 0.4, 0.0));
+        assert_eq!((c.auto_close_secs, c.switch_delay_secs), (120, 1));
+        assert_eq!((c.clock.x, c.clock.y, c.clock.size), (0.0, 1.0, 3.0));
+        for (fps, want) in [(0, 1), (1, 1), (2, 2), (3, 2), (4, 4), (60, 4)] {
+            c.preview_fps = fps;
+            c.clamp();
+            assert_eq!(c.preview_fps, want, "{fps} fps");
+        }
+    }
+
+    #[test]
+    fn pruned_drops_what_changes_nothing() {
+        let mut c = Config { order: vec!["HDMI_1".into(), "".into(), "HDMI_2".into(), "HDMI_1".into()], ..Config::default() };
+        c.source_mut("HDMI_1").name = Some("Box".into());
+        c.source_mut("HDMI_2").name = Some("  ".into());
+        c.source_mut("HDMI_3").hidden = true;
+        c.source_mut("HDMI_4").icon = SourceIcon::Pc;
+        let _ = c.source_mut("HOME");
+        let p = c.pruned();
+        assert_eq!(p.order, ["HDMI_1", "HDMI_2"]);
+        let ids: Vec<&str> = p.sources.iter().map(|o| o.id.as_str()).collect();
+        assert_eq!(ids, ["HDMI_1", "HDMI_3", "HDMI_4"]);
+    }
+
+    /// Everything that goes through $OUTPICK_CONFIG, in one test so nothing races on it.
+    #[test]
+    fn save_load_on_disk() {
+        let dir = std::env::temp_dir().join(format!("outpick-config-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let path = dir.join("config.json");
+        // SAFETY: the only test that reads or writes the environment.
+        unsafe { std::env::set_var("OUTPICK_CONFIG", &path) };
+
+        // No file: defaults.
+        assert_eq!(Config::load(), Config::default());
+
+        // Round trip, with the version written.
+        let mut c = Config {
+            theme: ThemeKind::ALL[1],
+            layout: Layout::Sidebar,
+            preview_fps: 4,
+            order: vec!["HDMI_2".into()],
+            ..Config::default()
+        };
+        c.source_mut("HDMI_2").name = Some("Console".into());
+        c.clock.show = true;
+        c.save();
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(text.contains("\"version\": 1"), "{text}");
+        assert!(!dir.join("config.json.tmp").exists());
+        assert_eq!(Config::load(), c);
+
+        // A syntax error: defaults, and the file is kept aside.
+        let broken = b"{\"theme\": \"studio\", oops";
+        std::fs::write(&path, broken).unwrap();
+        assert_eq!(Config::load(), Config::default());
+        assert_eq!(std::fs::read(dir.join("config.json.bad")).unwrap(), broken);
+
+        unsafe { std::env::remove_var("OUTPICK_CONFIG") };
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

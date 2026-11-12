@@ -16,7 +16,7 @@ static TEXTURES: OnceLock<Mutex<HashMap<&'static str, egui::TextureHandle>>> = O
 
 fn unrle(data: &[u8]) -> Vec<u8> {
     let mut out = Vec::with_capacity(ICON_PX * ICON_PX);
-    for pair in data.chunks_exact(2) {
+    for pair in data.as_chunks::<2>().0 {
         out.extend(std::iter::repeat_n(pair[1], pair[0] as usize));
     }
     out.resize(ICON_PX * ICON_PX, 0);

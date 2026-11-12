@@ -2,7 +2,7 @@
 
 use super::pickers::{POSITION_GRID, layout_glyph};
 use super::sources::COL_SHOW;
-use super::widgets::{cycle, fit, step, text_width};
+use super::widgets::{cycle, cycle_num, fit, step, text_width};
 use super::{App, Hit, Nav, Screen};
 use crate::config::{Config, Corners, Layout, Naming, Position};
 use crate::i18n::{Language, t, tf};
@@ -370,13 +370,13 @@ impl App {
             Item::ShowLiveTv => c.show_live_tv = !c.show_live_tv,
             Item::Naming => c.naming = cycle(&Naming::ALL, c.naming, dir),
             Item::ShowPreviews => c.show_previews = !c.show_previews,
-            Item::PreviewFps => c.preview_fps = cycle(&[1, 2, 4], c.preview_fps, dir),
+            Item::PreviewFps => c.preview_fps = cycle_num(&[1, 2, 4], c.preview_fps, dir),
             Item::ShowHome => c.show_home = !c.show_home,
             Item::ShowUsb => c.show_usb = !c.show_usb,
             Item::ShowMediaServers => c.show_media_servers = !c.show_media_servers,
-            Item::AutoClose => c.auto_close_secs = cycle(&[0, 5, 10, 15, 30, 60], c.auto_close_secs, dir),
+            Item::AutoClose => c.auto_close_secs = cycle_num(&[0, 5, 10, 15, 30, 60], c.auto_close_secs, dir),
             // Quick switch is always on: only its delay is set.
-            Item::SwitchDelay => c.switch_delay_secs = cycle(&[1, 2, 3, 4, 5, 7, 10], c.switch_delay_secs, dir),
+            Item::SwitchDelay => c.switch_delay_secs = cycle_num(&[1, 2, 3, 4, 5, 7, 10], c.switch_delay_secs, dir),
             Item::ClockPlace | Item::Sources | Item::Reset | Item::SourceKey | Item::MultikeyOpens | Item::CaptureAccess => {}
         }
     }

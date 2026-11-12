@@ -103,4 +103,21 @@ mod tests {
             assert!(fr.contains_key(k), "fr is missing {k}");
         }
     }
+
+    fn placeholders(text: &str) -> std::collections::BTreeSet<&str> {
+        text.split('{').skip(1).filter_map(|p| p.split_once('}').map(|(name, _)| name)).collect()
+    }
+
+    #[test]
+    fn placeholders_match_between_languages() {
+        let en = table(Lang::En);
+        let fr = table(Lang::Fr);
+        let mut checked = 0;
+        for (k, e) in en {
+            let Some(f) = fr.get(k) else { continue };
+            assert_eq!(placeholders(e), placeholders(f), "placeholders of {k}: en {e:?}, fr {f:?}");
+            checked += placeholders(e).len();
+        }
+        assert!(checked > 0, "no placeholder found at all");
+    }
 }

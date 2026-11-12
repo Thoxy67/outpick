@@ -34,7 +34,6 @@ hint.toggle = Show / hide
 hint.next_icon = Next icon
 hint.rename = Rename
 hint.drop = Drop
-hint.save = Save
 hint.confirm = Confirm
 hint.cancel = Cancel
 hint.cec_options = CEC options
@@ -214,7 +213,6 @@ sources.hidden = Hidden
 sources.icon = Icon: {name}
 sources.renamed_from = TV name: {name}
 rename.title = Rename
-rename.help = Type a name · OK to save · BACK to cancel
 rename.empty = Empty = the TV's own name
 
 # Icons
