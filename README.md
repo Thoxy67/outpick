@@ -76,7 +76,15 @@ As root on the TV:
 ```sh
 source-picker --takeover on|off|status        # the Source key opens this picker, or LG's again
 source-picker --capture-access on|off|status  # webOS 6: allow the video previews
+source-picker --uninstall                     # undo both, remove the boot hook and the previews
 ```
+
+Either option installs a small boot hook, `/var/lib/webosbrew/init.d/70-lg-c1-source` (a copy,
+not a link into the app). At each boot it puts the takeover back if the TV lost it, and once the
+app has been uninstalled it cleans up after it by itself: our key filter out of the compositor's
+chain (LG's filters left as they are), the app off the capture whitelist (other entries kept),
+`/var/lib/lg-c1-source` and the previews deleted, then the hook itself. Only the settings,
+`config.json`, are kept for a reinstall. `--uninstall` does the same at once, before removing the app.
 
 ## Configure
 

@@ -250,6 +250,8 @@ pub struct Config {
     /// Source pressed again in the picker moves to the next input; it is taken
     /// this many seconds after the last press (the arrows never start this).
     pub switch_delay_secs: u32,
+    /// The remote's Source/Input key opens the picker (with the key takeover on).
+    pub source_key_opens: bool,
     /// The remote's Multikey (accessibility) button opens the picker too, for
     /// remotes with no Source button (with the Source key takeover on).
     pub multikey_opens: bool,
@@ -290,6 +292,7 @@ impl Default for Config {
             auto_close_secs: 15,
             switch_delay_secs: 3,
             animations: true,
+            source_key_opens: true,
             multikey_opens: false,
             order: Vec::new(),
             sources: Vec::new(),
