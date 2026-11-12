@@ -1378,6 +1378,17 @@ impl App {
                 }
             };
             match row_kind_of(item, &self.cfg) {
+                RowKind::Choice if matches!(item, Item::Layout | Item::Position) => {
+                    // Pictures rather than words: what each choice looks like on screen.
+                    let value_right = right - chev - 8.0 * s;
+                    let strip_left = if item == Item::Layout {
+                        self.layout_strip(&clip, value_right, cy, selected, alpha)
+                    } else {
+                        self.position_picture(&clip, value_right, cy, selected, alpha)
+                    };
+                    let tr = clip.text(pos2(strip_left - 14.0 * s, cy), Align2::RIGHT_CENTER, &value, vfont, veil(vcol, alpha));
+                    arrows(tr.min.x);
+                }
                 RowKind::Choice => {
                     let value_right = right - chev - 8.0 * s;
                     let vw = text_width(p, &value, vfont.clone());
@@ -1647,6 +1658,71 @@ impl App {
         }
         self.footer(p, rect, &[(t("key.ok"), t("hint.choose")), (t("key.back"), t("hint.back"))], alpha);
         let _ = ui;
+    }
+
+    /// The four layouts as tiny screens, the current one in the accent colour.
+    /// Drawn right-aligned at `right`; returns its left edge.
+    fn layout_strip(&self, p: &egui::Painter, right: f32, cy: f32, selected: bool, alpha: f32) -> f32 {
+        let s = self.cfg.scale;
+        let k = &self.t;
+        let (w, h, gap) = (44.0 * s, 28.0 * s, 8.0 * s);
+        let n = Layout::ALL.len() as f32;
+        let left = right - n * w - (n - 1.0) * gap;
+        for (i, layout) in Layout::ALL.iter().enumerate() {
+            let r = Rect::from_min_size(pos2(left + i as f32 * (w + gap), cy - h / 2.0), vec2(w, h));
+            let current = *layout == self.cfg.layout;
+            let ink = if current { if selected { k.accent_text } else { k.accent } } else { k.text_faint };
+            p.rect(r, 4.0 * s, veil(if current { k.accent_soft } else { Color32::TRANSPARENT }, alpha), Stroke::new(1.5 * s, veil(ink, alpha)), StrokeKind::Inside);
+            let b = |x0: f32, y0: f32, x1: f32, y1: f32| {
+                let rr = Rect::from_min_max(pos2(r.min.x + w * x0, r.min.y + h * y0), pos2(r.min.x + w * x1, r.min.y + h * y1));
+                p.rect_filled(rr, 1.5 * s, veil(ink, alpha));
+            };
+            match layout {
+                Layout::Row => (0..4).for_each(|t| b(0.1 + t as f32 * 0.21, 0.5, 0.27 + t as f32 * 0.21, 0.84)),
+                Layout::Grid => (0..6).for_each(|t| {
+                    let (c, rw) = ((t % 3) as f32, (t / 3) as f32);
+                    b(0.24 + c * 0.19, 0.24 + rw * 0.28, 0.38 + c * 0.19, 0.44 + rw * 0.28)
+                }),
+                Layout::List => (0..3).for_each(|t| b(0.34, 0.2 + t as f32 * 0.22, 0.66, 0.34 + t as f32 * 0.22)),
+                Layout::Sidebar => {
+                    b(0.7, 0.12, 0.88, 0.88);
+                }
+            }
+        }
+        left
+    }
+
+    /// A tiny screen with the panel where it will appear. Returns its left edge.
+    fn position_picture(&self, p: &egui::Painter, right: f32, cy: f32, selected: bool, alpha: f32) -> f32 {
+        let s = self.cfg.scale;
+        let k = &self.t;
+        let (w, h) = (56.0 * s, 32.0 * s);
+        let r = Rect::from_min_size(pos2(right - w, cy - h / 2.0), vec2(w, h));
+        let ink = if selected { k.accent_text } else { k.accent };
+        p.rect(r, 4.0 * s, Color32::TRANSPARENT, Stroke::new(1.5 * s, veil(k.text_dim, alpha)), StrokeKind::Inside);
+        let (px, py) = match self.cfg.position {
+            Position::TopLeft => (0.0, 0.0),
+            Position::Top => (0.5, 0.0),
+            Position::TopRight => (1.0, 0.0),
+            Position::Left => (0.0, 0.5),
+            Position::Center => (0.5, 0.5),
+            Position::Right => (1.0, 0.5),
+            Position::BottomLeft => (0.0, 1.0),
+            Position::Bottom => (0.5, 1.0),
+            Position::BottomRight => (1.0, 1.0),
+        };
+        // The panel's shape follows the layout: wide for a row, tall for a list.
+        let (pw, ph) = match self.cfg.layout {
+            Layout::Row => (0.62, 0.24),
+            Layout::Grid => (0.42, 0.42),
+            Layout::List => (0.26, 0.6),
+            Layout::Sidebar => (0.24, 0.84),
+        };
+        let inner = r.shrink(4.0 * s);
+        let size = vec2(inner.width() * pw, inner.height() * ph);
+        let min = pos2(inner.min.x + (inner.width() - size.x) * px, inner.min.y + (inner.height() - size.y) * py);
+        p.rect_filled(Rect::from_min_size(min, size), 2.0 * s, veil(ink, alpha));
+        r.min.x
     }
 
     fn anim(&self, ui: &Ui, name: &str, target: f32, secs: f32) -> f32 {
