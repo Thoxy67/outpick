@@ -1,0 +1,156 @@
+//! The HDMI-CEC options of an input.
+
+use super::widgets::fit;
+use super::{App, Hit, Nav, Screen};
+use crate::i18n::t;
+use crate::icons;
+use crate::model::{Command, TvState};
+use crate::theme::{medium, regular, semibold, veil};
+use egui::{Align2, Rect, Ui, Vec2, pos2, vec2};
+
+/// What a row of the options screen does.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(super) enum OptAction {
+    Switch,
+    /// A SIMPLINK key (eim/cec/sendKeyEvent), as LG's screen remote sends them.
+    Cec(u32),
+    Rename,
+    Hide,
+}
+
+/// SIMPLINK key codes (LG's ScreenRemote KeyCodeModel.qml).
+const CEC_POWER: u32 = 0x0120_2000;
+const CEC_HOME: u32 = 0x0120_2001;
+const CEC_INFO: u32 = 0x0120_2002;
+const CEC_MENU: u32 = 0x0120_2006;
+
+pub(super) const OPTIONS: [OptAction; 7] = [
+    OptAction::Switch,
+    OptAction::Cec(CEC_POWER),
+    OptAction::Cec(CEC_HOME),
+    OptAction::Cec(CEC_MENU),
+    OptAction::Cec(CEC_INFO),
+    OptAction::Rename,
+    OptAction::Hide,
+];
+
+impl App {
+    pub(super) fn options_key(&mut self, k: &Nav, st: &TvState, now: f64) {
+        let Screen::Options { id, mut sel } = self.screen.clone() else { return };
+        let all = self.all_entries(st);
+        let Some(pos) = all.iter().position(|e| e.source.id == id) else {
+            self.screen = Screen::Picker;
+            return;
+        };
+        let e = all[pos].clone();
+        let n = OPTIONS.len();
+        match k {
+            Nav::Up => sel = (sel + n - 1) % n,
+            Nav::Down => sel = (sel + 1) % n,
+            Nav::Ok => match OPTIONS[sel] {
+                OptAction::Switch => {
+                    if !e.current {
+                        let _ = self.backend.commands.send(Command::Launch(e.source.app_id.clone(), e.source.params.clone()));
+                    }
+                    self.close(now);
+                    return;
+                }
+                OptAction::Cec(key) => {
+                    let _ = self.backend.commands.send(Command::Cec { app_id: e.source.app_id.clone(), key });
+                    // Out of the way, so the device's own screen shows.
+                    self.close(now);
+                    return;
+                }
+                OptAction::Rename => {
+                    let text = self.cfg.source(&id).and_then(|o| o.name.clone()).unwrap_or_default();
+                    let tv_name = self.tv_name(&e.source);
+                    self.screen = Screen::Rename { id, sel: pos, text, tv_name, from_options: true };
+                    return;
+                }
+                OptAction::Hide => {
+                    let o = self.cfg.source_mut(&id);
+                    o.hidden = true;
+                    self.persist();
+                    self.screen = Screen::Picker;
+                    return;
+                }
+            },
+            // The key that opened the options, or Back, closes them.
+            Nav::Back | Nav::Erase | Nav::Source | Nav::Left => {
+                self.screen = Screen::Picker;
+                return;
+            }
+            _ => {}
+        }
+        self.screen = Screen::Options { id, sel };
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn draw_options(&mut self, ui: &Ui, p: &egui::Painter, st: &TvState, screen: Rect, offset: Vec2, alpha: f32, id: &str, sel: usize) {
+        let s = self.cfg.scale;
+        let k = self.t;
+        let all = self.all_entries(st);
+        let Some(e) = all.iter().find(|e| e.source.id == id).cloned() else { return };
+        let src = &e.source;
+        let pad = 28.0 * s;
+        let head = pad + 38.0 * s + 18.0 * s;
+        let info_h = 96.0 * s;
+        let row_h = 52.0 * s;
+        let foot = 72.0 * s;
+        let want = vec2(760.0 * s, head + info_h + OPTIONS.len() as f32 * row_h + foot);
+        let rect = self.panel_rect(screen, want).translate(offset);
+        self.panel(p, rect, alpha);
+        self.header(p, rect, &e.name, &src.port_name(), alpha);
+
+        // What the TV knows about the device: CEC name, maker, cable and signal.
+        let yes_no = |b: Option<bool>, y: &'static str, n: &'static str| match b {
+            Some(true) => t(y).to_string(),
+            Some(false) => t(n).to_string(),
+            None => "—".to_string(),
+        };
+        let facts = [
+            (t("info.cec"), src.device.clone().unwrap_or_else(|| "—".into())),
+            (t("info.brand"), src.brand.clone().unwrap_or_else(|| "—".into())),
+            (t("info.cable"), yes_no(Some(src.connected), "value.plugged", "value.unplugged")),
+            (t("info.signal"), yes_no(src.signal, "value.present", "value.absent")),
+        ];
+        let info = Rect::from_min_size(pos2(rect.min.x + pad, rect.min.y + head), vec2(rect.width() - pad * 2.0, info_h - 16.0 * s));
+        p.rect_filled(info, k.radius * 1.5 * s, veil(k.field, alpha * 0.8));
+        let cw = info.width() / facts.len() as f32;
+        for (i, (label, value)) in facts.iter().enumerate() {
+            let x = info.min.x + cw * i as f32 + 18.0 * s;
+            p.text(pos2(x, info.min.y + 24.0 * s), Align2::LEFT_CENTER, *label, semibold(13.0 * s), veil(k.text_faint, alpha));
+            p.text(pos2(x, info.min.y + 52.0 * s), Align2::LEFT_CENTER, fit(p, value, medium(18.0 * s), cw - 26.0 * s), medium(18.0 * s), veil(k.text, alpha));
+        }
+
+        let area = Rect::from_min_max(pos2(rect.min.x + pad * 0.6, info.max.y + 16.0 * s), pos2(rect.max.x - pad * 0.6, rect.max.y - foot));
+        let clip = p.with_clip_rect(area.expand2(vec2(6.0 * s, 0.0)));
+        for (i, action) in OPTIONS.iter().enumerate() {
+            let r = Rect::from_min_size(pos2(area.min.x, area.min.y + i as f32 * row_h), vec2(area.width(), row_h - 6.0 * s));
+            self.add_hit(r.intersect(area), Hit::OptionRow(i));
+            let selected = i == sel;
+            if selected {
+                self.selected_row(&clip, r, alpha);
+            }
+            let (icon, label) = match action {
+                OptAction::Switch => ("circle-check", t("options.switch")),
+                OptAction::Cec(CEC_POWER) => ("power", t("options.cec_power")),
+                OptAction::Cec(CEC_HOME) => ("house", t("options.cec_home")),
+                OptAction::Cec(CEC_MENU) => ("menu", t("options.cec_menu")),
+                OptAction::Cec(_) => ("info", t("options.cec_info")),
+                OptAction::Rename => ("pencil", t("options.rename")),
+                OptAction::Hide => ("eye-off", t("options.hide")),
+            };
+            let ir = Rect::from_center_size(pos2(r.min.x + 30.0 * s, r.center().y), Vec2::splat(24.0 * s));
+            icons::paint(&clip, icon, ir, veil(if selected { k.accent_text } else { k.icon }, alpha));
+            clip.text(pos2(r.min.x + 58.0 * s, r.center().y), Align2::LEFT_CENTER, label, medium(20.0 * s), veil(k.text, alpha));
+            if matches!(action, OptAction::Cec(_)) {
+                // CEC keys go to the active input: say so where it applies.
+                let note = if e.current { "" } else { t("options.switches_first") };
+                clip.text(pos2(r.max.x - 16.0 * s, r.center().y), Align2::RIGHT_CENTER, note, regular(15.0 * s), veil(k.text_faint, alpha));
+            }
+        }
+        self.footer(p, rect, &[(t("key.ok"), t("hint.choose")), (t("key.back"), t("hint.back"))], alpha);
+        let _ = ui;
+    }
+}
