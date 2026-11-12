@@ -116,10 +116,10 @@ impl App {
         if vertical(self.cfg.layout) { Nav::Right } else { Nav::Down }
     }
 
-    /// The selected tile's id if it is a connected HDMI input (one with CEC options).
+    /// The selected tile's id if it is a connected HDMI input with HDMI-CEC (one with CEC options).
     fn selected_hdmi(&self, entries: &[Entry]) -> Option<String> {
         let e = entries.get(self.sel)?;
-        (e.source.kind == SourceKind::Hdmi && e.source.connected).then(|| e.source.id.clone())
+        (e.source.kind == SourceKind::Hdmi && e.source.connected && e.source.cec).then(|| e.source.id.clone())
     }
 
     pub(super) fn activate_selected(&mut self, entries: &[Entry], now: f64) {

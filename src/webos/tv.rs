@@ -271,6 +271,11 @@ pub fn parse_inputs(v: &Value) -> Vec<Source> {
             .or_else(|| cec.as_ref().and_then(|c| c.get("vendorId")).and_then(Value::as_u64).and_then(crate::model::cec_vendor).map(str::to_string))
             .or(spd_vendor);
         let signal = d.get("hdmiSignalExist").and_then(Value::as_bool);
+        let cec_power = cec.as_ref().and_then(|c| c.get("cecPower")).and_then(Value::as_str).and_then(|p| match p {
+            "On" => Some(true),
+            "Off" => Some(false),
+            _ => None,
+        });
         let label_custom = d.get("modified").and_then(Value::as_bool).unwrap_or(false);
         // The icon: HDMI-CEC first, then the info frame and LG's settings.
         let hints = crate::model::DeviceHints {
@@ -286,7 +291,7 @@ pub fn parse_inputs(v: &Value) -> Vec<Source> {
             remote_service: text(&urcu, "serviceType").unwrap_or_default(),
         };
         let tv_icon = crate::model::detect_icon(&hints, kind);
-        out.push(Source { tv_icon, id, app_id, label, kind, connected, device, params: None, brand, label_custom, signal });
+        out.push(Source { tv_icon, id, app_id, label, kind, connected, device, params: None, brand, label_custom, signal, cec: cec.is_some(), cec_power });
     }
     out
 }
@@ -325,6 +330,8 @@ pub fn parse_storage(v: &Value) -> Vec<Source> {
             brand: None,
             label_custom: false,
             signal: None,
+            cec: false,
+            cec_power: None,
         });
     }
     out

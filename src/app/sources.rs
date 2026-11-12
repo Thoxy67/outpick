@@ -1,6 +1,6 @@
 //! The Sources editor (show, icon, rename, order) and the rename field.
 
-use super::options::{OPTIONS, OptAction};
+use super::options::SEL_RENAME;
 use super::settings::{Item, item_index};
 use super::widgets::{cycle, fit, keep_visible, text_width};
 use super::{App, Hit, Nav, Screen};
@@ -84,7 +84,7 @@ impl App {
     pub(super) fn rename_key(&mut self, k: &Nav) {
         let Screen::Rename { id, sel, text, tv_name, from_options } = &mut self.screen else { return };
         let back = if *from_options {
-            Screen::Options { id: id.clone(), sel: OPTIONS.iter().position(|a| *a == OptAction::Rename).unwrap_or(0) }
+            Screen::Options { id: id.clone(), sel: SEL_RENAME }
         } else {
             Screen::Sources { sel: *sel, col: COL_RENAME, grabbed: false }
         };

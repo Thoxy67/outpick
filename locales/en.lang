@@ -237,3 +237,7 @@ icon.cable = Cable
 
 # Errors
 error.inputs = Inputs unavailable: {error}
+
+# Picker and options (2026-11)
+options.cec_power_on = Turn the device on
+options.cec_power_off = Turn the device off
