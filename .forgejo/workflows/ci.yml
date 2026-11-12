@@ -1,6 +1,6 @@
-# CI on Forgejo (Linux runner, jobs in Docker, as term's .forgejo/workflows/ci.yml): host tests,
-# then the real TV build (webOS NDK + SDL-webOS, size-optimised) and its .ipk, so a broken
-# cross build shows up before a tag does.
+# CI on Forgejo (Linux runner, jobs in Docker, as term's .forgejo/workflows/ci.yml): check,
+# clippy and host tests, then the real TV build (webOS NDK + SDL-webOS, size-optimised, size
+# limit) and its .ipk (kept as an artifact), so a broken cross build shows up before a tag does.
 #
 # Runner label: repository variable FORGEJO_RUNNER (default "docker").
 name: CI
@@ -46,10 +46,22 @@ jobs:
           restore-keys: forgejo-tv-
       - name: webOS SDK and SDL-webOS (pinned, cached)
         run: node tools/setup-webos-sdk.mjs && node tools/webos-runtime.mjs
+      # The desktop preview (default features) needs no system libraries to check: its
+      # windowing crates load libwayland/libX11/libGL at run time.
+      - name: Check (desktop preview)
+        run: cargo check --locked
+      - name: Clippy (host, no UI backend)
+        run: cargo clippy --no-default-features --locked -- -D warnings
       - name: Tests (host, no UI backend)
         run: cargo test --no-default-features --locked
       - name: TV build (armv7 soft-float, Thumb-2, size-optimised)
         run: tools/build-webos.sh --locked
+      - name: TV binary size (limit 2 300 000 bytes)
+        run: |
+          bin=target/armv7-unknown-linux-gnueabi/release/outpick
+          size="$(stat -c %s "$bin")"; limit=2300000
+          echo "TV binary: $size bytes (limit $limit)" | tee -a "${GITHUB_STEP_SUMMARY:-/dev/null}"
+          [ "$size" -le "$limit" ] || { echo "::error::$bin is $size bytes, over $limit"; exit 1; }
       - name: Package
         run: |
           python3 tools/package.py
@@ -64,3 +76,10 @@ jobs:
           [ "$h1" = "$h2" ] || { echo "::error::tools/package.py is not reproducible"; exit 1; }
       - name: Release notes since the last tag (preview)
         run: tools/release/changelog.py
+      # Forgejo's artifact server speaks the v3 protocol: its own fork of upload-artifact.
+      - name: Upload the .ipk
+        uses: https://code.forgejo.org/forgejo/upload-artifact@v4
+        with:
+          name: outpick-ipk
+          path: dist/*.ipk
+          if-no-files-found: error

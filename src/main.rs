@@ -2,6 +2,8 @@
 //!
 //! `--features webos` builds the TV app (SDL-webOS + GLES2 + luna-service2);
 //! the default build is a desktop preview with mock inputs for designing the UI.
+//! With neither (`--no-default-features`) it is only the host test build.
+#![cfg_attr(not(any(feature = "desktop", feature = "webos")), allow(dead_code))]
 
 mod app;
 mod clock;

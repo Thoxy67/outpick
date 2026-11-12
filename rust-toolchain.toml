@@ -2,6 +2,6 @@
 # so CI and local builds must use the same compiler. Bump deliberately.
 [toolchain]
 channel = "nightly-2026-11-10"
-components = ["rust-src"]
+components = ["rust-src", "clippy"]
 targets = ["armv7-unknown-linux-gnueabi"]
 profile = "minimal"
