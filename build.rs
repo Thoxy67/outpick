@@ -1,13 +1,13 @@
 //! Rasterizes the Lucide icons once, at build time, so the TV binary carries
 //! no SVG renderer (resvg/usvg/tiny-skia stay build dependencies).
 //!
-//! Each `assets/icons/*.svg` becomes a 128×128 alpha mask, run-length encoded
+//! Each `assets/icons/*.svg` becomes a 96×96 alpha mask (the largest icon is drawn at ≈97 px, scale 1.5 on 1080p), run-length encoded
 //! as (count, value) byte pairs: Lucide glyphs are mostly empty, so a mask
 //! shrinks to a few KiB. `src/icons.rs` decodes them into egui textures.
 
 use std::{env, fmt::Write as _, fs, path::Path};
 
-const PX: u32 = 128;
+const PX: u32 = 96;
 
 fn rle(alpha: &[u8]) -> Vec<u8> {
     let mut out = Vec::new();
