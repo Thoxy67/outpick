@@ -91,6 +91,8 @@ enum Screen {
     Options { id: String, sel: usize },
     /// The four layouts as large cards; `sel` indexes `Layout::ALL`.
     StylePick { sel: usize },
+    /// Choosing source `id`'s icon in a grid; `sel` indexes `SourceIcon::ALL`.
+    IconPick { id: String, sel: usize },
     /// A screen in a 3×3 grid where the arrows move the panel; `sel` indexes `POSITION_GRID`.
     PositionPick { sel: usize },
     /// Moving the clock over the whole screen (the interface shown faded); `orig` is restored on Back.
@@ -107,9 +109,9 @@ pub struct App {
     sel: usize,
     picked_initial: bool,
     moved_since_open: bool,
-    /// Quick switch: Source pressed in the picker, so the highlighted input is
-    /// taken after `switch_delay_secs` unless another key comes first.
-    source_armed: bool,
+    /// Quick switch: when Source was last pressed in the picker; the highlighted input
+    /// is taken `switch_delay_secs` later unless another key comes first.
+    armed_at: Option<f64>,
     /// How much of that countdown is left (1 → 0), for the bar under the selection.
     switch_left: Option<(f32, u32)>,
     opened_at: Option<f64>,
@@ -124,6 +126,17 @@ pub struct App {
     /// Source pictures uploaded to the GPU, by source id, with the frame they hold.
     preview_tex: std::collections::HashMap<String, (u64, egui::TextureHandle)>,
     scroll: f32,
+    /// The Sources editor's order when a row was grabbed: Back puts it back.
+    grab_order: Option<Vec<String>>,
+    /// The picker panel's last size as fractions of the screen, with its layout (for the
+    /// position picker's preview).
+    last_panel_frac: Option<(Layout, Vec2)>,
+    /// The last arrow while placing the clock, and when: a held arrow moves faster.
+    clock_last: Option<(Nav, f64)>,
+    /// Where the pointer was first reported since opening; it only hovers once it has
+    /// moved away from there (a Magic Remote at rest must not steal the selection).
+    pointer_origin: Option<Pos2>,
+    pointer_live: bool,
 }
 
 impl App {
@@ -143,12 +156,17 @@ impl App {
             sel: 0,
             picked_initial: false,
             moved_since_open: false,
-            source_armed: false,
+            armed_at: None,
             switch_left: None,
             opened_at: None,
             last_key: 0.0,
             closing: None,
             scroll: 0.0,
+            grab_order: None,
+            last_panel_frac: None,
+            clock_last: None,
+            pointer_origin: None,
+            pointer_live: false,
             hits: Default::default(),
             last_click: f64::NEG_INFINITY,
             snap: true,
@@ -163,6 +181,9 @@ impl App {
         self.screen = Screen::Picker;
         self.picked_initial = false;
         self.moved_since_open = false;
+        self.armed_at = None;
+        self.pointer_origin = None;
+        self.pointer_live = false;
         self.opened_at = None;
         self.closing = None;
         let _ = self.backend.commands.send(Command::Refresh);
@@ -228,7 +249,16 @@ impl App {
         let mut translated: Vec<Nav> = Vec::with_capacity(keys.len());
         for k in keys {
             match k {
-                Nav::Pointer(pos) => translated.extend(self.hover(*pos)),
+                Nav::Pointer(pos) => {
+                    if !self.pointer_live {
+                        let origin = *self.pointer_origin.get_or_insert(*pos);
+                        if origin.distance(*pos) <= 12.0 {
+                            continue;
+                        }
+                        self.pointer_live = true;
+                    }
+                    translated.extend(self.hover(*pos))
+                }
                 // Placing the clock: a click puts it there.
                 Nav::Click(pos) if matches!(self.screen, Screen::ClockPlace { .. }) => {
                     let r = ui.max_rect();
@@ -236,6 +266,7 @@ impl App {
                     self.cfg.clock.y = ((pos.y - r.min.y) / r.height()).clamp(0.0, 1.0);
                 }
                 Nav::Click(pos) => {
+                    self.pointer_live = true;
                     self.last_click = now;
                     translated.extend(self.click(*pos));
                 }
@@ -276,7 +307,8 @@ impl App {
                 Screen::Rename { .. } => self.rename_key(k),
                 Screen::Options { .. } => self.options_key(k, &st, now),
                 Screen::StylePick { .. } | Screen::PositionPick { .. } => self.pick_key(k, &ctx),
-                Screen::ClockPlace { .. } => self.clock_key(k),
+                Screen::ClockPlace { .. } => self.clock_key(k, now),
+                Screen::IconPick { .. } => self.icon_key(k, &st),
             }
             if self.closing.is_some() {
                 break;
@@ -286,13 +318,17 @@ impl App {
 
         // Timers: quick switch (Source pressed again and again, as on LG's picker) and auto close.
         self.switch_left = None;
+        if self.screen != Screen::Picker {
+            self.armed_at = None;
+        }
         if self.screen == Screen::Picker && self.closing.is_none() {
             let idle = now - self.last_key;
-            if self.source_armed {
+            if let Some(armed) = self.armed_at {
+                // Counted from the last Source press: nothing else (a resting pointer) restarts it.
                 let total = self.cfg.switch_delay_secs as f64;
-                let left = total - idle;
+                let left = total - (now - armed);
                 if left <= 0.0 {
-                    self.source_armed = false;
+                    self.armed_at = None;
                     self.activate_selected(&entries, now);
                 } else {
                     self.switch_left = Some(((left / total) as f32, left.ceil() as u32));
@@ -352,7 +388,7 @@ impl App {
                 }
             }
             (Some(Hit::OptionRow(i)), Screen::Options { sel, .. }) => *sel = i,
-            (Some(Hit::PickCell(i)), Screen::StylePick { sel } | Screen::PositionPick { sel }) => *sel = i,
+            (Some(Hit::PickCell(i)), Screen::StylePick { sel } | Screen::PositionPick { sel } | Screen::IconPick { sel, .. }) => *sel = i,
             (Some(Hit::SourceCell(r, c)), Screen::Sources { sel, col, grabbed }) if !*grabbed => {
                 *sel = r;
                 *col = c;
@@ -453,6 +489,7 @@ impl App {
             Screen::StylePick { sel } => self.draw_style_pick(ui, &p, screen, alpha, sel),
             Screen::PositionPick { sel } => self.draw_position_pick(ui, &p, screen, alpha, sel),
             Screen::ClockPlace { .. } => self.draw_clock_place(ui, &p, st, entries, screen, alpha),
+            Screen::IconPick { id, sel } => self.draw_icon_pick(ui, &p, st, screen, alpha, &id, sel),
         }
         // The clock, over everything but its own placing screen.
         if self.cfg.clock.show && !matches!(self.screen, Screen::ClockPlace { .. }) {

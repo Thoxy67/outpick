@@ -56,7 +56,7 @@ fn date_text(n: &Now) -> String {
 }
 
 /// Text with a soft shadow, so it reads over any picture.
-fn shadowed(p: &Painter, at: Pos2, anchor: Align2, text: &str, font: egui::FontId, color: Color32, alpha: f32) -> Rect {
+pub(crate) fn shadowed(p: &Painter, at: Pos2, anchor: Align2, text: &str, font: egui::FontId, color: Color32, alpha: f32) -> Rect {
     let off = vec2(0.0, font.size * 0.04 + 1.0);
     p.text(at + off, anchor, text, font.clone(), Color32::from_black_alpha((150.0 * alpha) as u8));
     p.text(at, anchor, text, font, veil(color, alpha))

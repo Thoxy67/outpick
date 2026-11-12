@@ -59,7 +59,12 @@ pub fn parse_inputs(v: &Value) -> Vec<Source> {
             remote_service: text(&urcu, "serviceType").unwrap_or_default(),
         };
         let tv_icon = crate::model::detect_icon(&hints, kind);
-        out.push(Source { tv_icon, id, app_id, label, kind, connected, device, params: None, brand, label_custom, signal });
+        let cec_power = cec.as_ref().and_then(|c| c.get("cecPower")).and_then(Value::as_str).and_then(|p| match p {
+            "On" => Some(true),
+            "Off" => Some(false),
+            _ => None,
+        });
+        out.push(Source { tv_icon, id, app_id, label, kind, connected, device, params: None, brand, label_custom, signal, cec: cec.is_some(), cec_power });
     }
     out
 }
@@ -98,6 +103,8 @@ pub fn parse_storage(v: &Value) -> Vec<Source> {
             brand: None,
             label_custom: false,
             signal: None,
+            cec: false,
+            cec_power: None,
         });
     }
     out

@@ -1,8 +1,8 @@
 //! The Sources editor (show, icon, rename, order) and the rename field.
 
-use super::options::{OPTIONS, OptAction};
+use super::options::SEL_RENAME;
 use super::settings::Item;
-use super::widgets::{cycle, fit, keep_visible, text_width};
+use super::widgets::{fit, keep_visible, text_width};
 use super::{App, Hit, Nav, Screen};
 use crate::i18n::{t, tf};
 use crate::icons::{self, SourceIcon};
@@ -16,6 +16,8 @@ const COL_ICON: usize = 1;
 const COL_RENAME: usize = 2;
 const COL_MOVE: usize = 3;
 const COLS: usize = 4;
+/// Columns of the icon picker's grid.
+const ICON_COLS: usize = 5;
 
 impl App {
     pub(super) fn sources_key(&mut self, k: &Nav, st: &TvState) {
@@ -53,8 +55,10 @@ impl App {
                         o.hidden = !o.hidden;
                     }
                     COL_ICON => {
-                        let o = self.cfg.source_mut(id);
-                        o.icon = cycle(&SourceIcon::ALL, o.icon, 1);
+                        let cur = self.cfg.source(id).map(|o| o.icon).unwrap_or_default();
+                        let at = SourceIcon::ALL.iter().position(|i| *i == cur).unwrap_or(0);
+                        self.screen = Screen::IconPick { id: id.clone(), sel: at };
+                        return;
                     }
                     COL_RENAME => {
                         let text = self.cfg.source(id).and_then(|o| o.name.clone()).unwrap_or_default();
@@ -63,14 +67,28 @@ impl App {
                         return;
                     }
                     _ => {
-                        if !grabbed && self.cfg.order.len() != n {
-                            self.cfg.order = ids.clone();
+                        // Grabbing remembers the order, so Back can put it back; OK drops.
+                        if grabbed {
+                            self.grab_order = None;
+                        } else {
+                            self.grab_order = Some(self.cfg.order.clone());
+                            if self.cfg.order.len() != n {
+                                self.cfg.order = ids.clone();
+                            }
                         }
                         grabbed = !grabbed;
                     }
                 }
             }
-            Nav::Back | Nav::Erase | Nav::Source if grabbed => grabbed = false,
+            Nav::Back | Nav::Erase | Nav::Source if grabbed => {
+                if let Some(order) = self.grab_order.take() {
+                    let id = ids[sel].clone();
+                    self.cfg.order = order;
+                    // Follow the row back to where it was.
+                    sel = self.all_entries(st).iter().position(|e| e.source.id == id).unwrap_or(sel);
+                }
+                grabbed = false;
+            }
             Nav::Back | Nav::Erase | Nav::Source => {
                 self.persist();
                 self.screen = back_to_settings;
@@ -84,7 +102,7 @@ impl App {
     pub(super) fn rename_key(&mut self, k: &Nav) {
         let Screen::Rename { id, sel, text, tv_name, from_options } = &mut self.screen else { return };
         let back = if *from_options {
-            Screen::Options { id: id.clone(), sel: OPTIONS.iter().position(|a| *a == OptAction::Rename).unwrap_or(0) }
+            Screen::Options { id: id.clone(), sel: SEL_RENAME }
         } else {
             Screen::Sources { sel: *sel, col: COL_RENAME, grabbed: false }
         };
@@ -185,11 +203,14 @@ impl App {
                 clip.text(pos2(x, dy), Align2::LEFT_CENTER, fit(p, &detail, regular(16.0 * s), maxw), regular(16.0 * s), veil(k.text_dim, alpha));
             }
         }
+        if grabbed {
+            self.footer(p, rect, &[("▲ ▼", t("hint.move")), (t("key.ok"), t("hint.drop")), (t("key.back"), t("hint.cancel"))], alpha);
+            return;
+        }
         let ok = match col {
             COL_SHOW => t("hint.toggle"),
-            COL_ICON => t("hint.next_icon"),
+            COL_ICON => t("hint.choose_icon"),
             COL_RENAME => t("hint.rename"),
-            _ if grabbed => t("hint.drop"),
             _ => t("hint.move"),
         };
         self.footer(p, rect, &[(t("key.ok"), ok), ("◀ ▶", t("hint.column")), (t("key.back"), t("hint.back"))], alpha);
@@ -226,5 +247,76 @@ impl App {
         ui.ctx().request_repaint_after(std::time::Duration::from_millis(500));
         p.text(pos2(field.min.x, field.max.y + 20.0 * s), Align2::LEFT_TOP, t("rename.empty"), regular(17.0 * s), veil(k.text_dim, alpha));
         self.footer(p, rect, &[(t("key.ok"), t("hint.confirm")), (t("key.back"), t("hint.cancel"))], alpha);
+    }
+
+    /// Keys of the icon picker: arrows move in the grid, OK keeps, Back cancels.
+    pub(super) fn icon_key(&mut self, k: &Nav, st: &TvState) {
+        let Screen::IconPick { id, mut sel } = self.screen.clone() else { return };
+        let n = SourceIcon::ALL.len();
+        let back = |app: &Self| {
+            let row = app.all_entries(st).iter().position(|e| e.source.id == id).unwrap_or(0);
+            Screen::Sources { sel: row, col: COL_ICON, grabbed: false }
+        };
+        match k {
+            Nav::Left => sel = (sel + n - 1) % n,
+            Nav::Right => sel = (sel + 1) % n,
+            Nav::Up if sel >= ICON_COLS => sel -= ICON_COLS,
+            Nav::Down if sel + ICON_COLS < n => sel += ICON_COLS,
+            Nav::Ok => {
+                self.cfg.source_mut(&id).icon = SourceIcon::ALL[sel];
+                self.persist();
+                self.screen = back(self);
+                return;
+            }
+            Nav::Back | Nav::Erase | Nav::Source => {
+                self.screen = back(self);
+                return;
+            }
+            _ => {}
+        }
+        self.screen = Screen::IconPick { id, sel };
+    }
+
+    /// The icons as a grid of cards with their names, as the style picker shows layouts.
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn draw_icon_pick(&mut self, ui: &Ui, p: &egui::Painter, st: &TvState, screen: Rect, alpha: f32, id: &str, sel: usize) {
+        let s = self.cfg.scale;
+        let k = self.t;
+        let all = self.all_entries(st);
+        let entry = all.iter().find(|e| e.source.id == id);
+        let name = entry.map(|e| e.name.clone()).unwrap_or_default();
+        let current = self.cfg.source(id).map(|o| o.icon).unwrap_or_default();
+        let rows = SourceIcon::ALL.len().div_ceil(ICON_COLS);
+        let (cw, ch, gap, pad) = (156.0 * s, 112.0 * s, 14.0 * s, 28.0 * s);
+        let top_h = 64.0 * s + 12.0 * s;
+        let size = vec2(ICON_COLS as f32 * cw + (ICON_COLS - 1) as f32 * gap + 2.0 * pad, top_h + rows as f32 * ch + (rows - 1) as f32 * gap + 84.0 * s);
+        let rect = Rect::from_center_size(screen.center(), size.min(screen.size() - Vec2::splat(40.0 * s)));
+        self.panel(p, rect, alpha);
+        self.header(p, rect, t("icon_pick.title"), &name, alpha);
+        let cell = |i: usize| Rect::from_min_size(pos2(rect.min.x + pad + (i % ICON_COLS) as f32 * (cw + gap), rect.min.y + top_h + (i / ICON_COLS) as f32 * (ch + gap)), vec2(cw, ch));
+        for (i, icon) in SourceIcon::ALL.iter().enumerate() {
+            let card = cell(i);
+            self.add_hit(card, Hit::PickCell(i));
+            let chosen = i == sel;
+            p.rect(card, k.radius_lg * 1.4 * s, veil(if chosen { k.accent_soft } else { k.field }, alpha * 0.8), Stroke::new(1.0, veil(k.field_border, alpha)), StrokeKind::Inside);
+            // Auto shows what the TV picked for this input.
+            let svg = match (icon, entry) {
+                (SourceIcon::Auto, Some(e)) => e.source.tv_icon.svg(),
+                _ => icon.svg(),
+            };
+            let tint = if chosen { k.accent_text } else if *icon == current { k.text } else { k.icon };
+            icons::paint(p, svg, Rect::from_center_size(pos2(card.center().x, card.min.y + 42.0 * s), Vec2::splat(40.0 * s)), veil(tint, alpha));
+            let label = fit(p, icon.label(), regular(16.0 * s), cw - 16.0 * s);
+            let ink = if chosen || *icon == current { k.text } else { k.text_dim };
+            p.text(pos2(card.center().x, card.max.y - 24.0 * s), Align2::CENTER_CENTER, label, regular(16.0 * s), veil(ink, alpha));
+            if *icon == current {
+                p.circle_filled(pos2(card.max.x - 14.0 * s, card.min.y + 14.0 * s), 5.0 * s, veil(k.accent, alpha));
+            }
+        }
+        let target = cell(sel);
+        let at = pos2(self.anim(ui, "icon-x", target.min.x, 0.12), self.anim(ui, "icon-y", target.min.y, 0.12));
+        let ring = Rect::from_min_size(at, vec2(cw, ch)).expand(4.0 * s);
+        p.rect_stroke(ring, k.radius_lg * 1.4 * s + 4.0 * s, Stroke::new(3.0 * s, veil(k.accent, alpha)), StrokeKind::Outside);
+        self.footer(p, rect, &[("◀ ▲ ▼ ▶", t("hint.choose")), (t("key.ok"), t("hint.confirm")), (t("key.back"), t("hint.cancel"))], alpha);
     }
 }

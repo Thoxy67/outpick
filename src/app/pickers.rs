@@ -23,15 +23,19 @@ pub(super) const POSITION_GRID: [Position; 9] = [
 ];
 
 impl App {
-    /// Placing the clock: the arrows move it (1 % of the screen a step), OK keeps, Back cancels.
-    pub(super) fn clock_key(&mut self, k: &Nav) {
+    /// Placing the clock: the arrows move it (1 % of the screen a step, 3 % while an arrow
+    /// is held: the same arrow again within 150 ms), OK keeps, Back cancels.
+    pub(super) fn clock_key(&mut self, k: &Nav, now: f64) {
         let Screen::ClockPlace { orig } = self.screen.clone() else { return };
+        let held = self.clock_last.as_ref().is_some_and(|(last, at)| last == k && now - at < 0.15);
+        self.clock_last = matches!(k, Nav::Left | Nav::Right | Nav::Up | Nav::Down).then(|| (k.clone(), now));
+        let (dx, dy) = if held { (0.03, 0.03) } else { (0.01, 0.015) };
         let c = &mut self.cfg.clock;
         match k {
-            Nav::Left => c.x = (c.x - 0.01).max(0.0),
-            Nav::Right => c.x = (c.x + 0.01).min(1.0),
-            Nav::Up => c.y = (c.y - 0.015).max(0.0),
-            Nav::Down => c.y = (c.y + 0.015).min(1.0),
+            Nav::Left => c.x = (c.x - dx).max(0.0),
+            Nav::Right => c.x = (c.x + dx).min(1.0),
+            Nav::Up => c.y = (c.y - dy).max(0.0),
+            Nav::Down => c.y = (c.y + dy).min(1.0),
             Nav::Ok => {
                 self.persist();
                 self.screen = self.settings_at(Item::ClockPlace);
@@ -59,7 +63,9 @@ impl App {
         // Wide enough for the help line and every hint, so nothing leaves the bar.
         let help = p.layout_no_wrap(t("clock.place_help").to_string(), regular(17.0 * s), k.text_dim).size().x;
         let w = (self.footer_width(p, &hints, 1.0) + 56.0 * s).max(help + 64.0 * s).max(520.0 * s);
-        let bar = Rect::from_center_size(pos2(screen.center().x, screen.min.y + 70.0 * s), vec2(w.min(screen.width() - 32.0 * s), 110.0 * s));
+        // At the top, unless the clock is there: then at the bottom.
+        let bar_y = if c.y < 0.3 { screen.max.y - 70.0 * s } else { screen.min.y + 70.0 * s };
+        let bar = Rect::from_center_size(pos2(screen.center().x, bar_y), vec2(w.min(screen.width() - 32.0 * s), 110.0 * s));
         p.rect(bar, k.radius_lg * 2.0 * s, veil(k.card, 0.92 * alpha), Stroke::new(1.0, veil(k.card_border, alpha)), StrokeKind::Inside);
         p.text(pos2(bar.center().x, bar.min.y + 28.0 * s), Align2::CENTER_CENTER, t("clock.place_help"), regular(17.0 * s), veil(k.text_dim, alpha));
         self.footer(p, bar, &hints, alpha);
@@ -90,9 +96,17 @@ impl App {
                 self.screen = Screen::StylePick { sel };
             }
             Screen::PositionPick { mut sel } => {
-                // The arrows move across the screen, as the panel would.
+                // The arrows move across the screen, as the panel would. A sidebar
+                // docks only to the left or right edge.
+                let sidebar = self.cfg.layout == Layout::Sidebar;
+                if sidebar {
+                    sel = sidebar_cell(sel);
+                }
                 let (r, c) = (sel / 3, sel % 3);
                 match k {
+                    Nav::Left if sidebar => sel = SIDE_LEFT,
+                    Nav::Right if sidebar => sel = SIDE_RIGHT,
+                    Nav::Up | Nav::Down if sidebar => {}
                     Nav::Left if c > 0 => sel -= 1,
                     Nav::Right if c < 2 => sel += 1,
                     Nav::Up if r > 0 => sel -= 3,
@@ -120,7 +134,11 @@ impl App {
     pub(super) fn panel_glyph_rect(&self, inner: Rect, pos: Position) -> Rect {
         let (px, py) = position_anchor(pos);
         // The panel's shape follows the layout: wide for a row, tall for a list.
-        let (pw, ph) = layout_shape(self.cfg.layout);
+        // The real panel's size when it was last shown in this layout, else a typical one.
+        let (pw, ph) = match self.last_panel_frac {
+            Some((l, f)) if l == self.cfg.layout => (f.x.clamp(0.1, 1.0), f.y.clamp(0.1, 1.0)),
+            _ => layout_shape(self.cfg.layout),
+        };
         let size = vec2(inner.width() * pw, inner.height() * ph);
         Rect::from_min_size(pos2(inner.min.x + (inner.width() - size.x) * px, inner.min.y + (inner.height() - size.y) * py), size)
     }
@@ -150,7 +168,7 @@ impl App {
             layout_glyph(p, glyph, *layout, veil(ink, alpha), (glyph.height() * 0.06).max(1.5));
             p.text(pos2(card.center().x, card.max.y - 34.0 * s), Align2::CENTER_CENTER, layout.label(), semibold(20.0 * s), veil(if i == sel { k.text } else { k.text_dim }, alpha));
             if current {
-                p.text(pos2(card.center().x, card.max.y - 12.0 * s), Align2::CENTER_CENTER, t("pick.current"), regular(14.0 * s), veil(k.accent_text, alpha));
+                p.text(pos2(card.center().x, card.max.y - 12.0 * s), Align2::CENTER_CENTER, t("pick.current"), regular(15.0 * s), veil(k.accent_text, alpha));
             }
         }
         let ring = Rect::from_min_size(pos2(hx, top), vec2(cw, ch)).expand(5.0 * s);
@@ -163,6 +181,8 @@ impl App {
         let s = self.cfg.scale;
         let k = self.t;
         let pad = 28.0 * s;
+        let sidebar = self.cfg.layout == Layout::Sidebar;
+        let sel = if sidebar { sidebar_cell(sel) } else { sel };
         let (sw, sh) = (560.0 * s, 315.0 * s);
         let size = vec2(sw + 2.0 * pad, 64.0 * s + 12.0 * s + sh + 14.0 * s + 72.0 * s);
         let rect = Rect::from_center_size(screen.center(), size.min(screen.size() - Vec2::splat(40.0 * s)));
@@ -174,10 +194,19 @@ impl App {
         let inner = mini.shrink(14.0 * s);
         // The nine places, faint; each one is a pointer target too.
         for (i, pos) in POSITION_GRID.iter().enumerate() {
+            if sidebar && i != SIDE_LEFT && i != SIDE_RIGHT {
+                continue;
+            }
             let g = self.panel_glyph_rect(inner, *pos);
-            let cell = Rect::from_min_size(pos2(mini.min.x + (i % 3) as f32 * sw / 3.0, mini.min.y + (i / 3) as f32 * sh / 3.0), vec2(sw / 3.0, sh / 3.0));
+            let cell = if sidebar {
+                // Two halves of the screen.
+                Rect::from_min_size(pos2(mini.min.x + if i == SIDE_LEFT { 0.0 } else { sw / 2.0 }, mini.min.y), vec2(sw / 2.0, sh))
+            } else {
+                Rect::from_min_size(pos2(mini.min.x + (i % 3) as f32 * sw / 3.0, mini.min.y + (i / 3) as f32 * sh / 3.0), vec2(sw / 3.0, sh / 3.0))
+            };
             self.add_hit(cell, Hit::PickCell(i));
-            if *pos == self.cfg.position && i != sel {
+            let current = if sidebar { pos.is_left() == self.cfg.position.is_left() } else { *pos == self.cfg.position };
+            if current && i != sel {
                 p.rect_stroke(g, 4.0 * s, Stroke::new(1.5 * s, veil(k.text_faint, alpha)), StrokeKind::Inside);
             }
         }
@@ -186,9 +215,21 @@ impl App {
         let at = Rect::from_min_size(pos2(self.anim(ui, "pos-x", target.min.x, 0.14), self.anim(ui, "pos-y", target.min.y, 0.14)), target.size());
         p.rect(at, 5.0 * s, veil(k.accent_soft, alpha), Stroke::new(2.5 * s, veil(k.accent, alpha)), StrokeKind::Inside);
         let glyph = at.shrink(3.0 * s);
-        layout_glyph(p, glyph, self.cfg.layout, veil(k.accent, alpha), (glyph.height() * 0.06).max(1.5));
-        self.footer(p, rect, &[("◀ ▲ ▼ ▶", t("hint.move")), (t("key.ok"), t("hint.confirm")), (t("key.back"), t("hint.cancel"))], alpha);
+        // The glyph is the panel itself here: a sidebar shows its rows as a list does.
+        let inside = if sidebar { Layout::List } else { self.cfg.layout };
+        layout_glyph(p, glyph, inside, veil(k.accent, alpha), (glyph.height() * 0.06).max(1.5));
+        let arrows = if sidebar { "◀ ▶" } else { "◀ ▲ ▼ ▶" };
+        self.footer(p, rect, &[(arrows, t("hint.move")), (t("key.ok"), t("hint.confirm")), (t("key.back"), t("hint.cancel"))], alpha);
     }
+}
+
+/// The sidebar's two places in `POSITION_GRID`.
+const SIDE_LEFT: usize = 3;
+const SIDE_RIGHT: usize = 5;
+
+/// A `POSITION_GRID` index as the sidebar's side (its config only says left or right).
+fn sidebar_cell(sel: usize) -> usize {
+    if POSITION_GRID.get(sel).is_some_and(|p| p.is_left()) { SIDE_LEFT } else { SIDE_RIGHT }
 }
 
 /// Where a panel at `pos` sits on the screen, as fractions of the free room (0 = left/top).

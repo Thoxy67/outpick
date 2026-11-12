@@ -15,6 +15,7 @@ use egui::{Align2, Color32, Rect, Stroke, StrokeKind, Ui, Vec2, pos2, vec2};
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) enum Item {
     Language,
+    ShowCustomizeTile,
     Theme,
     Accent,
     Corners,
@@ -64,7 +65,7 @@ const PAGES: &[(&str, &str, &[Item])] = &[
     ("section.previews", "monitor", &[Item::ShowPreviews, Item::PreviewFps, Item::CaptureAccess]),
     ("section.clock", "timer", &[Item::ClockShow, Item::ClockStyle, Item::ClockSize, Item::Clock24h, Item::ClockSeconds, Item::ClockPlace]),
     ("section.remote", "tv", &[Item::SourceKey, Item::MultikeyOpens, Item::SwitchDelay, Item::AutoClose]),
-    ("section.general", "settings", &[Item::Language, Item::Reset]),
+    ("section.general", "settings", &[Item::Language, Item::ShowCustomizeTile, Item::Reset]),
 ];
 
 /// Clock sizes: tenths up to 160 %, then fifths (big clocks need fewer stops).
@@ -106,6 +107,7 @@ fn row_kind_of(item: Item) -> RowKind {
         Item::Dim => RowKind::Slider(0.0, 0.8),
         Item::ClockSize => RowKind::Slider(0.4, 3.0),
         Item::ShowPanel
+        | Item::ShowCustomizeTile
         | Item::ClockShow
         | Item::Clock24h
         | Item::ClockSeconds
@@ -325,6 +327,7 @@ impl App {
             Item::CaptureAccess => (st.capture_access == Some(true), !st.takeover_busy && st.capture_access.is_some()),
             Item::ShowPreviews => (c.show_previews && st.preview_supported != Some(false), st.preview_supported != Some(false)),
             Item::ShowPanel => (c.show_panel, true),
+            Item::ShowCustomizeTile => (c.show_customize_tile, true),
             Item::ClockShow => (c.clock.show, true),
             Item::Clock24h => (c.clock.hour24, true),
             Item::ClockSeconds => (c.clock.seconds, true),
@@ -353,6 +356,7 @@ impl App {
             Item::Position => c.position = cycle(&Position::ALL, c.position, dir),
             Item::Corners => c.corners = cycle(&Corners::ALL, c.corners, dir),
             Item::Animations => c.animations = !c.animations,
+            Item::ShowCustomizeTile => c.show_customize_tile = !c.show_customize_tile,
             Item::ShowIcons => c.show_icons = !c.show_icons,
             Item::ShowHeader => c.show_header = !c.show_header,
             Item::ShowHints => c.show_hints = !c.show_hints,
@@ -439,6 +443,7 @@ impl App {
             Item::Position => (t("settings.position"), c.position.label().into()),
             Item::Corners => (t("settings.corners"), c.corners.label().into()),
             Item::Animations => (t("settings.animations"), none()),
+            Item::ShowCustomizeTile => (t("settings.show_customize_tile"), none()),
             Item::ShowIcons => (t("settings.show_icons"), none()),
             Item::ShowHeader => (t("settings.show_header"), none()),
             Item::ShowHints => (t("settings.show_hints"), none()),

@@ -42,6 +42,10 @@ pub struct Source {
     pub label_custom: bool,
     /// HDMI: whether a picture signal is present (None when unknown).
     pub signal: Option<bool>,
+    /// HDMI-CEC (SIMPLINK) reaches the device behind this input.
+    pub cec: bool,
+    /// Whether that device is on, as SIMPLINK reports it (webOS 25; None when unknown).
+    pub cec_power: Option<bool>,
 }
 
 impl Source {
@@ -93,6 +97,8 @@ impl Source {
             brand: None,
             label_custom: false,
             signal: None,
+            cec: false,
+            cec_power: None,
         }
     }
 
@@ -109,6 +115,8 @@ impl Source {
             brand: None,
             label_custom: false,
             signal: None,
+            cec: false,
+            cec_power: None,
         }
     }
 }
@@ -427,6 +435,8 @@ pub fn mock_backend(repaint: impl Fn() + Send + 'static) -> Backend {
             brand: None,
             label_custom: false,
             signal: None,
+            cec: false,
+            cec_power: None,
         };
         let store = |id: &str, name: &str, kind: SourceKind, sub: &str| Source {
             id: id.into(),
@@ -440,6 +450,8 @@ pub fn mock_backend(repaint: impl Fn() + Send + 'static) -> Backend {
             brand: None,
             label_custom: false,
             signal: None,
+            cec: false,
+            cec_power: None,
         };
         {
             let mut st = s.lock().unwrap();
@@ -452,6 +464,9 @@ pub fn mock_backend(repaint: impl Fn() + Send + 'static) -> Backend {
             ];
             sources[2].brand = Some("Denon".into());
             sources[1].brand = Some("Mecool".into());
+            sources[1].cec = true;
+            sources[2].cec = true;
+            sources[2].cec_power = Some(true);
             sources[4].label_custom = true;
             st.sources = sources;
             st.storage = vec![
@@ -580,6 +595,8 @@ mod tests {
             brand: brand.map(Into::into),
             label_custom: false,
             signal: None,
+            cec: false,
+            cec_power: None,
         }
     }
 

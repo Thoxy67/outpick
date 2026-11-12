@@ -234,3 +234,14 @@ icon.cable = Câble
 
 # Erreurs
 error.inputs = Entrées indisponibles : {error}
+
+# Sélecteur et options (2026-11)
+options.cec_power_on = Allumer l'appareil
+options.cec_power_off = Éteindre l'appareil
+picker.switching = → {name} dans {n} s
+hint.switch_now = Changer maintenant
+hint.choose_icon = Choisir l'icône
+icon_pick.title = Icône
+picker.empty = Aucune entrée à afficher
+picker.empty_hint = OK : Personnaliser
+settings.show_customize_tile = Tuile Personnaliser

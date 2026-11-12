@@ -247,8 +247,9 @@ pub struct Config {
     pub show_usb: bool,
     /// DLNA/UPnP media servers on the network.
     pub show_media_servers: bool,
-    /// Show the Customize tile in the picker. It is the only way into the settings: with it
-    /// off, they are reached again only by setting this back to true in config.json.
+    /// Show the Customize tile in the picker. Without it the settings are still reached with
+    /// the arrow that has nothing to do in the layout (Up in a row or on a grid's first row,
+    /// Left in a list or sidebar); the footer then says so.
     pub show_customize_tile: bool,
     /// Close by itself after this many seconds without a key (0 = never).
     pub auto_close_secs: u32,

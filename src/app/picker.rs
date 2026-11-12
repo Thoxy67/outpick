@@ -1,7 +1,7 @@
 //! The picker itself: its keys, its tiles and the source previews.
 
 use super::entries::Entry;
-use super::widgets::{fit, grid_cols, text_width, two_lines, vertical};
+use super::widgets::{fit, gradient, grid_cols, text_width, two_lines, vertical};
 use super::{App, Nav, Screen, Hit};
 use crate::config::Layout;
 use crate::i18n::{t, tf};
@@ -13,9 +13,13 @@ use egui::{Align2, Color32, Pos2, Rect, Stroke, StrokeKind, Ui, Vec2, pos2, vec2
 impl App {
     pub(super) fn picker_key(&mut self, k: &Nav, entries: &[Entry], now: f64) {
         let n = entries.len() + usize::from(self.cfg.show_customize_tile);
-        if n == 0 {
-            if matches!(k, Nav::Back | Nav::Erase | Nav::Ok) {
-                self.close(now);
+        // Nothing to pick (or the inputs could not be read): OK opens Customize.
+        let empty = self.backend.state.lock().map(|st| empty_state(&st, entries)).unwrap_or(false);
+        if empty || n == 0 {
+            match k {
+                Nav::Ok => self.open_customize(),
+                Nav::Back | Nav::Erase => self.close(now),
+                _ => {}
             }
             return;
         }
@@ -38,19 +42,34 @@ impl App {
                     return;
                 }
             }
-            // Source pressed again cycles the inputs (never Customize) and the
-            // highlighted one is taken after `switch_delay_secs`, as on LG's picker.
-            // The arrows never start this countdown: OK switches then.
+            // Source pressed again cycles the inputs and the highlighted one is taken
+            // after `switch_delay_secs`, as on LG's picker. Only HDMI inputs with a cable
+            // and Live TV take part (not USB, DLNA, Home or Customize), unless there are none.
+            // The arrows never start this countdown: they cancel it, and OK switches then.
             Nav::Source => {
-                let m = entries.len().max(1);
-                self.sel = (self.sel + 1) % m;
-                self.source_armed = true;
+                let quick: Vec<usize> = entries
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, e)| matches!(e.source.kind, SourceKind::Hdmi | SourceKind::LiveTv) && e.source.connected)
+                    .map(|(i, _)| i)
+                    .collect();
+                let quick = if quick.is_empty() { (0..entries.len()).collect() } else { quick };
+                if let Some(&next) = quick.iter().find(|&&i| i > self.sel).or(quick.first()) {
+                    self.sel = next;
+                }
+                self.armed_at = Some(now);
             }
             Nav::Left if !list => self.sel = (self.sel + n - 1) % n,
             Nav::Right if !list => self.sel = (self.sel + 1) % n,
             Nav::Up if list => self.sel = (self.sel + n - 1) % n,
             Nav::Down if list => self.sel = (self.sel + 1) % n,
             Nav::Up if grid && self.sel >= cols => self.sel -= cols,
+            // The arrow that leads nowhere in this layout opens Customize (not while a quick
+            // switch counts down: an arrow cancels that first).
+            Nav::Up | Nav::Left if *k == self.customize_nav() && self.armed_at.is_none() => {
+                self.open_customize();
+                return;
+            }
             Nav::Down if grid && self.sel + cols < n => self.sel += cols,
             Nav::Down if grid && self.sel / cols < (n - 1) / cols => self.sel = n - 1,
             Nav::Ok => self.activate_selected(entries, now),
@@ -59,7 +78,7 @@ impl App {
         }
         if *k != Nav::Source {
             // Any other key means the user is choosing: OK switches then.
-            self.source_armed = false;
+            self.armed_at = None;
         }
         if self.sel != old {
             self.moved_since_open = true;
@@ -116,16 +135,27 @@ impl App {
         if vertical(self.cfg.layout) { Nav::Right } else { Nav::Down }
     }
 
-    /// The selected tile's id if it is a connected HDMI input (one with CEC options).
+    /// The selected tile's id if it is a connected HDMI input with HDMI-CEC (one with CEC options).
     fn selected_hdmi(&self, entries: &[Entry]) -> Option<String> {
         let e = entries.get(self.sel)?;
-        (e.source.kind == SourceKind::Hdmi && e.source.connected).then(|| e.source.id.clone())
+        (e.source.kind == SourceKind::Hdmi && e.source.connected && e.source.cec).then(|| e.source.id.clone())
+    }
+
+    /// The arrow that moves nowhere in this layout, which opens Customize: Up in a row or on
+    /// a grid's first row, Left in a list.
+    fn customize_nav(&self) -> Nav {
+        if vertical(self.cfg.layout) { Nav::Left } else { Nav::Up }
+    }
+
+    /// Opens Customize. The one place the picker builds the Settings screen.
+    pub(super) fn open_customize(&mut self) {
+        self.screen = Screen::Settings { sel: 0, confirm_reset: false };
+        self.moved_since_open = false;
     }
 
     pub(super) fn activate_selected(&mut self, entries: &[Entry], now: f64) {
         if self.sel >= entries.len() {
-            self.screen = Screen::Settings { sel: 0, confirm_reset: false };
-            self.moved_since_open = false;
+            self.open_customize();
             return;
         }
         let e = &entries[self.sel];
@@ -156,7 +186,7 @@ impl App {
                 tile_w = fit_w.max(160.0 * s);
             }
         }
-        let (tile, gap, cols, rows) = match self.cfg.layout {
+        let (mut tile, gap, cols, rows) = match self.cfg.layout {
             Layout::Row => (vec2(tile_w, 196.0 * s), 18.0 * s, n.max(1), 1),
             Layout::Grid => {
                 let c = grid_cols(n);
@@ -168,7 +198,7 @@ impl App {
         // In a list, the selected row pushes its neighbours apart so its ring never
         // touches them: rows above stay, it moves one step down, rows below two.
         let push = if vertical(self.cfg.layout) { 9.0 * s } else { 0.0 };
-        let content = vec2(
+        let mut content = vec2(
             cols as f32 * tile.x + cols.saturating_sub(1) as f32 * gap,
             rows as f32 * tile.y + rows.saturating_sub(1) as f32 * gap + 2.0 * push,
         );
@@ -184,8 +214,12 @@ impl App {
         let want = vec2((content.x + pad * 2.0).max(min_w), head + content.y + foot + 8.0 * s);
         let rect = self.panel_rect(screen, want).translate(offset);
         self.panel(p, rect, alpha);
+        self.last_panel_frac = Some((self.cfg.layout, rect.size() / screen.size()));
 
-        let subtitle = if let Some(err) = &st.error {
+        let target = entries.get(self.sel).filter(|_| self.switch_left.is_some());
+        let subtitle = if let (Some(e), Some((_, secs))) = (target, self.switch_left) {
+            tf("picker.switching", &[("name", &e.name), ("n", &secs.to_string())])
+        } else if let Some(err) = &st.error {
             tf("error.inputs", &[("error", err)])
         } else if !st.loaded {
             t("picker.loading").to_string()
@@ -197,7 +231,14 @@ impl App {
         }
 
         // Lay tiles out, scrolling to keep the selection in view.
+        let empty = empty_state(st, entries);
+        let n = if empty { 0 } else { n };
         let area = Rect::from_min_max(pos2(rect.min.x + pad, rect.min.y + head), pos2(rect.max.x - pad, rect.max.y - foot - 8.0 * s));
+        // A list's rows span the panel, however wide its hints made it.
+        if vertical(self.cfg.layout) {
+            tile.x = area.width();
+            content.x = tile.x;
+        }
         let cell = |i: usize| -> Rect {
             let (c, r) = (i % cols, i / cols);
             Rect::from_min_size(pos2(area.min.x + c as f32 * (tile.x + gap), area.min.y + r as f32 * (tile.y + gap)), tile)
@@ -251,7 +292,7 @@ impl App {
             self.add_hit(rect_i.intersect(area), Hit::Tile(i));
         }
         if n > 0 {
-            let pictured = entries.get(self.sel).is_some_and(|e| self.cfg.show_previews && self.preview_tex.contains_key(&e.source.id));
+            let pictured = entries.get(self.sel).is_some_and(|e| self.pictured(e));
             clip.rect_filled(hl, r, veil(k.hover, alpha * if pictured { 0.25 } else { 1.0 }));
             clip.rect_stroke(hl.expand(5.0 * s), r + 5.0 * s, Stroke::new(3.0 * s, veil(k.accent, alpha)), StrokeKind::Outside);
             // Quick switch countdown: a bar along the bottom of the selection that empties.
@@ -284,7 +325,7 @@ impl App {
             let fade = if self.cfg.animations && !self.snap { 0.16 } else { 0.0 };
             let selected = ui.ctx().animate_bool_with_time(egui::Id::unique(("lg-source-tile", i)), i == self.sel, fade);
             match entries.get(i) {
-                Some(e) => self.draw_tile(ui, &clip, rect_i, e.icon.svg(), e, selected, alpha),
+                Some(e) => self.draw_tile(ui, &clip, rect_i, e.icon.svg(), e, selected, self.pictured(e), alpha),
                 None => {
                     let e = Entry {
                         source: Source::live_tv(),
@@ -294,9 +335,57 @@ impl App {
                         current: false,
                         hidden: false,
                     };
-                    self.draw_tile(ui, &clip, rect_i, "settings", &e, selected, alpha);
+                    self.draw_tile(ui, &clip, rect_i, "settings", &e, selected, false, alpha);
                 }
             }
+        }
+
+        // Content cut by the panel's edge fades out there, with a chevron when it is sideways.
+        let edge = 48.0 * s;
+        let fade_c = veil(k.card, alpha * self.cfg.panel_opacity.max(0.85));
+        let clear = Color32::TRANSPARENT;
+        let outer = area.expand(10.0 * s);
+        if overflow_x > 0.0 {
+            for (left, hidden) in [(true, self.scroll > 0.5), (false, self.scroll < overflow_x - 0.5)] {
+                if !hidden {
+                    continue;
+                }
+                let band = if left {
+                    Rect::from_min_max(outer.min, pos2(outer.min.x + edge, outer.max.y))
+                } else {
+                    Rect::from_min_max(pos2(outer.max.x - edge, outer.min.y), outer.max)
+                };
+                if self.cfg.show_panel {
+                    let (a, b) = if left { (fade_c, clear) } else { (clear, fade_c) };
+                    gradient(p, band, a, b, false);
+                }
+                let at = pos2(if left { band.min.x + 16.0 * s } else { band.max.x - 16.0 * s }, band.center().y);
+                p.circle_filled(at, 20.0 * s, veil(k.card, alpha * 0.9));
+                icons::paint(p, if left { "chevron-left" } else { "chevron-right" }, Rect::from_center_size(at, Vec2::splat(30.0 * s)), veil(k.text, alpha));
+            }
+        } else if overflow_y > 0.0 && self.cfg.show_panel {
+            if self.scroll > 0.5 {
+                gradient(p, Rect::from_min_max(outer.min, pos2(outer.max.x, outer.min.y + edge)), fade_c, clear, true);
+            }
+            if self.scroll < overflow_y - 0.5 {
+                gradient(p, Rect::from_min_max(pos2(outer.min.x, outer.max.y - edge), outer.max), clear, fade_c, true);
+            }
+        }
+
+        if empty {
+            // Nothing to show: say why, and the way to Customize.
+            let line1 = st.error.as_ref().map(|e| tf("error.inputs", &[("error", e)])).unwrap_or_else(|| t("picker.empty").to_string());
+            let c = area.center();
+            let f1 = semibold(22.0 * s);
+            self.label(p, pos2(c.x, c.y - 16.0 * s), Align2::CENTER_CENTER, &fit(p, &line1, f1.clone(), area.width()), f1, k.text, false, alpha);
+            self.label(p, pos2(c.x, c.y + 18.0 * s), Align2::CENTER_CENTER, t("picker.empty_hint"), regular(18.0 * s), k.text_dim, true, alpha);
+            if self.cfg.show_hints {
+                self.footer(p, rect, &[(t("key.ok"), t("picker.customize")), (t("key.back"), t("hint.close"))], alpha);
+            }
+            if st.loaded {
+                self.snap = false;
+            }
+            return;
         }
 
         let mv = match self.cfg.layout {
@@ -304,11 +393,19 @@ impl App {
             l if vertical(l) => "▲ ▼",
             _ => "◀ ▶",
         };
-        if self.cfg.show_hints {
+        if self.cfg.show_hints && self.switch_left.is_some() {
+            // Counting down: OK takes it now, an arrow stops it.
+            let cancel = if vertical(self.cfg.layout) { "▲ ▼" } else { "◀ ▶" };
+            self.footer(p, rect, &[(t("key.ok"), t("hint.switch_now")), (cancel, t("hint.cancel")), (t("key.back"), t("hint.close"))], alpha);
+        } else if self.cfg.show_hints {
             let mut hints = vec![(t("key.ok"), t("hint.switch")), (mv, t("hint.move"))];
             // Only on an HDMI input with a device behind it: its CEC options.
             if self.selected_hdmi(entries).is_some() {
                 hints.push((if vertical(self.cfg.layout) { "▶" } else { "▼" }, t("hint.cec_options")));
+            }
+            // Without the Customize tile, the arrow that opens it.
+            if !self.cfg.show_customize_tile {
+                hints.push((if vertical(self.cfg.layout) { "◀" } else { "▲" }, t("picker.customize")));
             }
             hints.push((t("key.back"), t("hint.close")));
             self.footer(p, rect, &hints, alpha);
@@ -318,16 +415,31 @@ impl App {
         }
     }
 
+    /// Whether tile `e` shows its source's picture (the highlight and the text follow it).
+    fn pictured(&self, e: &Entry) -> bool {
+        self.cfg.show_previews && self.preview_tex.contains_key(&e.source.id)
+    }
+
     #[allow(clippy::too_many_arguments)]
-    fn draw_tile(&self, _ui: &Ui, p: &egui::Painter, rect: Rect, icon: &str, e: &Entry, selected: f32, alpha: f32) {
+    fn draw_tile(&self, _ui: &Ui, p: &egui::Painter, rect: Rect, icon: &str, e: &Entry, selected: f32, pictured: bool, alpha: f32) {
         let s = self.cfg.scale;
         let k = &self.t;
         let dimmed = !e.source.connected && !e.current;
-        let fg = mix(if dimmed { k.text_faint } else { k.text }, k.text, selected);
-        let icon_tint = mix(if dimmed { k.text_faint } else { k.icon }, k.accent_text, selected);
+        // Over a picture (shaded dark whatever the theme) the text is light, so a light
+        // theme's dark ink never sits on it.
+        let (fg, icon_tint, sub_c) = if pictured {
+            let white = |a: f32| Color32::from_white_alpha((a * 255.0) as u8);
+            let icon_sel = if k.dark { k.accent_text } else { white(0.85) };
+            (Color32::WHITE, mix(white(0.85), icon_sel, selected), white(0.72))
+        } else {
+            (
+                mix(if dimmed { k.text_faint } else { k.text }, k.text, selected),
+                mix(if dimmed { k.text_faint } else { k.icon }, k.accent_text, selected),
+                if dimmed { k.text_faint } else { k.text_dim },
+            )
+        };
         // The selected icon grows a little, eased in with the selection.
         let lift = 1.0 + 0.08 * selected;
-        let sub_c = if dimmed { k.text_faint } else { k.text_dim };
 
         if vertical(self.cfg.layout) {
             // The icon grows around a fixed centre; the label never moves.
@@ -352,28 +464,31 @@ impl App {
             return;
         }
 
-        // Icon, name and subtitle as one block, centred in the tile.
-        let isz = if self.cfg.show_icons { 60.0 * s } else { 0.0 };
-        let icon_size = isz * lift;
+        // Fixed anchors, so icons and names line up from tile to tile whatever each one holds:
+        // the icon centred at 36 % of the height, the first name line at 64 %, then a line
+        // further down the subtitle (or the name's second line).
+        let h = rect.height();
+        let has_icon = self.cfg.show_icons;
+        if has_icon {
+            let ir = Rect::from_center_size(pos2(rect.center().x, rect.min.y + 0.36 * h), Vec2::splat(60.0 * s * lift));
+            icons::paint(p, icon, ir, veil(icon_tint, alpha));
+        }
         let maxw = rect.width() - 28.0 * s;
         // A long name takes two lines rather than being cut.
         let name_font = semibold(22.0 * s);
+        let sub_font = regular(17.0 * s);
         let lines = two_lines(p, &e.name, name_font.clone(), maxw);
         let line_h = 26.0 * s;
-        let (gap1, name_h, gap2, sub_h) = (if isz > 0.0 { 16.0 * s } else { 0.0 }, line_h * lines.len() as f32, 4.0 * s, 20.0 * s);
-        let block = isz + gap1 + name_h + if e.sub.is_some() { gap2 + sub_h } else { 0.0 };
-        let top = rect.center().y - block / 2.0;
-        if isz > 0.0 {
-            let ir = Rect::from_center_size(pos2(rect.center().x, top + isz / 2.0), Vec2::splat(icon_size));
-            icons::paint(p, icon, ir, veil(icon_tint, alpha));
-        }
+        let first = rect.min.y + if has_icon { 0.64 * h } else { 0.44 * h };
         for (li, line) in lines.iter().enumerate() {
-            let ly = top + isz + gap1 + line_h * (li as f32 + 0.5);
-            p.text(pos2(rect.center().x, ly), Align2::CENTER_CENTER, line, name_font.clone(), veil(fg, alpha));
+            p.text(pos2(rect.center().x, first + line_h * li as f32), Align2::CENTER_CENTER, line, name_font.clone(), veil(fg, alpha));
         }
         if let Some(sub) = &e.sub {
-            let sy = top + isz + gap1 + name_h + gap2 + sub_h / 2.0;
-            p.text(pos2(rect.center().x, sy), Align2::CENTER_CENTER, fit(p, sub, regular(16.5 * s), maxw), regular(16.5 * s), veil(sub_c, alpha));
+            let sy = first + line_h * lines.len() as f32;
+            // Under a two-line name only if it still fits in the tile.
+            if sy + 11.0 * s <= rect.max.y - 6.0 * s {
+                p.text(pos2(rect.center().x, sy), Align2::CENTER_CENTER, fit(p, sub, sub_font.clone(), maxw), sub_font, veil(sub_c, alpha));
+            }
         }
         if e.current {
             self.badge(p, pos2(rect.max.x - 12.0 * s, rect.min.y + 12.0 * s), Align2::RIGHT_TOP, alpha);
@@ -384,7 +499,7 @@ impl App {
     fn badge(&self, p: &egui::Painter, at: Pos2, anchor: Align2, alpha: f32) {
         let s = self.cfg.scale;
         let k = &self.t;
-        let f = semibold(13.0 * s);
+        let f = semibold(15.0 * s);
         let label = t("picker.now");
         let w = text_width(p, label, f.clone()) + 30.0 * s;
         let r = anchor.anchor_size(at, vec2(w, 24.0 * s));
@@ -393,4 +508,10 @@ impl App {
         p.circle_filled(pos2(r.min.x + 11.0 * s, r.center().y), 3.5 * s, veil(ink, alpha));
         p.text(pos2(r.min.x + 18.0 * s, r.center().y), Align2::LEFT_CENTER, label, f, veil(ink, alpha));
     }
+
+}
+
+/// The picker has nothing to offer: no entries once loaded, or the inputs could not be read.
+fn empty_state(st: &TvState, entries: &[Entry]) -> bool {
+    st.error.is_some() || (st.loaded && entries.is_empty())
 }
