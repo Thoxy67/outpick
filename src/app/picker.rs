@@ -1,7 +1,7 @@
 //! The picker itself: its keys, its tiles and the source previews.
 
 use super::entries::Entry;
-use super::widgets::{fit, grid_cols, text_width, two_lines, vertical};
+use super::widgets::{fit, gradient, grid_cols, text_width, two_lines, vertical};
 use super::{App, Nav, Screen, Hit};
 use crate::config::Layout;
 use crate::i18n::{t, tf};
@@ -296,6 +296,38 @@ impl App {
                     };
                     self.draw_tile(ui, &clip, rect_i, "settings", &e, selected, false, alpha);
                 }
+            }
+        }
+
+        // Content cut by the panel's edge fades out there, with a chevron when it is sideways.
+        let edge = 48.0 * s;
+        let fade_c = veil(k.card, alpha * self.cfg.panel_opacity.max(0.85));
+        let clear = Color32::TRANSPARENT;
+        let outer = area.expand(10.0 * s);
+        if overflow_x > 0.0 {
+            for (left, hidden) in [(true, self.scroll > 0.5), (false, self.scroll < overflow_x - 0.5)] {
+                if !hidden {
+                    continue;
+                }
+                let band = if left {
+                    Rect::from_min_max(outer.min, pos2(outer.min.x + edge, outer.max.y))
+                } else {
+                    Rect::from_min_max(pos2(outer.max.x - edge, outer.min.y), outer.max)
+                };
+                if self.cfg.show_panel {
+                    let (a, b) = if left { (fade_c, clear) } else { (clear, fade_c) };
+                    gradient(p, band, a, b, false);
+                }
+                let at = pos2(if left { band.min.x + 16.0 * s } else { band.max.x - 16.0 * s }, band.center().y);
+                p.circle_filled(at, 20.0 * s, veil(k.card, alpha * 0.9));
+                icons::paint(p, if left { "chevron-left" } else { "chevron-right" }, Rect::from_center_size(at, Vec2::splat(30.0 * s)), veil(k.text, alpha));
+            }
+        } else if overflow_y > 0.0 && self.cfg.show_panel {
+            if self.scroll > 0.5 {
+                gradient(p, Rect::from_min_max(outer.min, pos2(outer.max.x, outer.min.y + edge)), fade_c, clear, true);
+            }
+            if self.scroll < overflow_y - 0.5 {
+                gradient(p, Rect::from_min_max(pos2(outer.min.x, outer.max.y - edge), outer.max), clear, fade_c, true);
             }
         }
 
