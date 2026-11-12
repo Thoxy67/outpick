@@ -127,9 +127,9 @@ def main():
     packageinfo = {"id": APP_ID, "version": VERSION, "app": APP_ID}
     data_entries = [
         (base + "appinfo.json", json.dumps(APPINFO, indent=2).encode(), 0o644),
-        # Icon 2 of assets/app-icons (HDMI port flowing into a screen).
-        (base + "icon.png", (ROOT / "assets/app-icons/app-icon-80.png").read_bytes(), 0o644),
-        (base + "largeIcon.png", (ROOT / "assets/app-icons/app-icon-130.png").read_bytes(), 0o644),
+        # The app icon, assets/app-icon/outpick.svg (HDMI port flowing into a screen).
+        (base + "icon.png", (ROOT / "assets/app-icon/outpick-80.png").read_bytes(), 0o644),
+        (base + "largeIcon.png", (ROOT / "assets/app-icon/outpick-130.png").read_bytes(), 0o644),
         (base + "outpick", BIN.read_bytes(), 0o755),
         (base + "lib/libSDL2-2.0.so.0", SDL.read_bytes(), 0o755),
         (f"usr/palm/packages/{APP_ID}/packageinfo.json", json.dumps(packageinfo, indent=2).encode(), 0o644),

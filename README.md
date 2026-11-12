@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="assets/app-icons/icon-2.svg" alt="Outpick" width="128">
+  <img src="assets/app-icon/outpick.svg" alt="Outpick" width="128">
 </p>
 
 <h1 align="center">Outpick</h1>

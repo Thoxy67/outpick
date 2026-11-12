@@ -1,4 +1,4 @@
-//! Lucide icons (ISC). `build.rs` rasterizes every `assets/icons/*.svg` into a
+//! Lucide icons (ISC). `build.rs` rasterizes every `assets/ui-icons/*.svg` into a
 //! 96 px alpha mask at build time, so no SVG renderer ships in the binary;
 //! here the masks become white textures that `paint` tints, as Photocraft's
 //! `icons.rs` tints its recoloured SVGs.

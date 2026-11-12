@@ -1,7 +1,7 @@
 //! Rasterizes the Lucide icons once, at build time, so the TV binary carries
 //! no SVG renderer (resvg/usvg/tiny-skia stay build dependencies).
 //!
-//! Each `assets/icons/*.svg` becomes a 96×96 alpha mask (the largest icon is drawn at ≈97 px, scale 1.5 on 1080p), run-length encoded
+//! Each `assets/ui-icons/*.svg` becomes a 96×96 alpha mask (the largest icon is drawn at ≈97 px, scale 1.5 on 1080p), run-length encoded
 //! as (count, value) byte pairs: Lucide glyphs are mostly empty, so a mask
 //! shrinks to a few KiB. `src/icons.rs` decodes them into egui textures.
 
@@ -26,10 +26,10 @@ fn rle(alpha: &[u8]) -> Vec<u8> {
 }
 
 fn main() {
-    println!("cargo:rerun-if-changed=assets/icons");
+    println!("cargo:rerun-if-changed=assets/ui-icons");
     let out = env::var("OUT_DIR").unwrap();
-    let mut entries: Vec<_> = fs::read_dir("assets/icons")
-        .expect("assets/icons")
+    let mut entries: Vec<_> = fs::read_dir("assets/ui-icons")
+        .expect("assets/ui-icons")
         .filter_map(|e| e.ok().map(|e| e.path()))
         .filter(|p| p.extension().is_some_and(|x| x == "svg"))
         .collect();

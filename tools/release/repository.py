@@ -50,7 +50,7 @@ def main() -> int:
     ipk_name = f"{APP_ID}_{VERSION}_arm.ipk"
     ipk = (out / ipk_name).read_bytes()
 
-    shutil.copyfile(ROOT / "assets/app-icons/app-icon-130.png", out / "largeIcon.png")
+    shutil.copyfile(ROOT / "assets/app-icon/outpick-130.png", out / "largeIcon.png")
     shutil.copyfile(ROOT / "assets/homebrew-description.html", out / "description.html")
     icon_uri = f"{release_url}/largeIcon.png"
     manifest = {
