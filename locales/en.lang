@@ -162,7 +162,6 @@ settings.show_disconnected = Show unplugged inputs
 settings.show_devices = Show device names
 settings.show_live_tv = Show Live TV
 settings.auto_close = Close after
-settings.auto_switch = Source key: switch after
 settings.sources = Sources
 settings.sources_value = Rename, hide, reorder
 settings.reset = Reset look

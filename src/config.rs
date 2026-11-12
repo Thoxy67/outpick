@@ -247,9 +247,6 @@ pub struct Config {
     pub show_customize_tile: bool,
     /// Close by itself after this many seconds without a key (0 = never).
     pub auto_close_secs: u32,
-    /// Switch to the highlighted source this many seconds after the last key,
-    /// as LG's picker does when Source is pressed repeatedly (0 = only on OK).
-    pub auto_switch_secs: u32,
     /// The remote's Multikey (accessibility) button opens the picker too, for
     /// remotes with no Source button (with the Source key takeover on).
     pub multikey_opens: bool,
@@ -288,7 +285,6 @@ impl Default for Config {
             show_media_servers: false,
             show_customize_tile: true,
             auto_close_secs: 15,
-            auto_switch_secs: 0,
             animations: true,
             multikey_opens: false,
             order: Vec::new(),
@@ -370,7 +366,6 @@ impl Config {
         self.panel_opacity = self.panel_opacity.clamp(0.4, 1.0);
         self.dim = self.dim.clamp(0.0, 0.8);
         self.auto_close_secs = self.auto_close_secs.min(120);
-        self.auto_switch_secs = self.auto_switch_secs.min(10);
         self.clock.x = self.clock.x.clamp(0.0, 1.0);
         self.clock.y = self.clock.y.clamp(0.0, 1.0);
         self.clock.size = self.clock.size.clamp(0.4, 3.0);
