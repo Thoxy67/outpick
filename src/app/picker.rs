@@ -38,13 +38,22 @@ impl App {
                     return;
                 }
             }
-            // Source pressed again cycles the inputs (never Customize) and the
-            // highlighted one is taken after `switch_delay_secs`, as on LG's picker.
-            // The arrows never start this countdown: OK switches then.
+            // Source pressed again cycles the inputs and the highlighted one is taken
+            // after `switch_delay_secs`, as on LG's picker. Only HDMI inputs with a cable
+            // and Live TV take part (not USB, DLNA, Home or Customize), unless there are none.
+            // The arrows never start this countdown: they cancel it, and OK switches then.
             Nav::Source => {
-                let m = entries.len().max(1);
-                self.sel = (self.sel + 1) % m;
-                self.source_armed = true;
+                let quick: Vec<usize> = entries
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, e)| matches!(e.source.kind, SourceKind::Hdmi | SourceKind::LiveTv) && e.source.connected)
+                    .map(|(i, _)| i)
+                    .collect();
+                let quick = if quick.is_empty() { (0..entries.len()).collect() } else { quick };
+                if let Some(&next) = quick.iter().find(|&&i| i > self.sel).or(quick.first()) {
+                    self.sel = next;
+                }
+                self.armed_at = Some(now);
             }
             Nav::Left if !list => self.sel = (self.sel + n - 1) % n,
             Nav::Right if !list => self.sel = (self.sel + 1) % n,
@@ -59,7 +68,7 @@ impl App {
         }
         if *k != Nav::Source {
             // Any other key means the user is choosing: OK switches then.
-            self.source_armed = false;
+            self.armed_at = None;
         }
         if self.sel != old {
             self.moved_since_open = true;
@@ -185,7 +194,10 @@ impl App {
         let rect = self.panel_rect(screen, want).translate(offset);
         self.panel(p, rect, alpha);
 
-        let subtitle = if let Some(err) = &st.error {
+        let target = entries.get(self.sel).filter(|_| self.switch_left.is_some());
+        let subtitle = if let (Some(e), Some((_, secs))) = (target, self.switch_left) {
+            tf("picker.switching", &[("name", &e.name), ("n", &secs.to_string())])
+        } else if let Some(err) = &st.error {
             tf("error.inputs", &[("error", err)])
         } else if !st.loaded {
             t("picker.loading").to_string()
@@ -341,7 +353,11 @@ impl App {
             l if vertical(l) => "▲ ▼",
             _ => "◀ ▶",
         };
-        if self.cfg.show_hints {
+        if self.cfg.show_hints && self.switch_left.is_some() {
+            // Counting down: OK takes it now, an arrow stops it.
+            let cancel = if vertical(self.cfg.layout) { "▲ ▼" } else { "◀ ▶" };
+            self.footer(p, rect, &[(t("key.ok"), t("hint.switch_now")), (cancel, t("hint.cancel")), (t("key.back"), t("hint.close"))], alpha);
+        } else if self.cfg.show_hints {
             let mut hints = vec![(t("key.ok"), t("hint.switch")), (mv, t("hint.move"))];
             // Only on an HDMI input with a device behind it: its CEC options.
             if self.selected_hdmi(entries).is_some() {

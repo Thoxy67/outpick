@@ -241,3 +241,5 @@ error.inputs = Entrées indisponibles : {error}
 # Sélecteur et options (2026-11)
 options.cec_power_on = Allumer l'appareil
 options.cec_power_off = Éteindre l'appareil
+picker.switching = → {name} dans {n} s
+hint.switch_now = Changer maintenant
