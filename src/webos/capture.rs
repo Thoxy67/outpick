@@ -4,31 +4,43 @@
 //! listed in its whitelist capture the video plane; anyone else, root
 //! included, gets REFUSED_PERMISSION_DENIED. It reads /etc/palm/whitelist-conf.json
 //! and, when present, /home/root/whitelist-conf.json, whose `forceCaptureClient`
-//! list is the one to join. "On" writes that file (from the system one, keeping
-//! any file already there aside as a backup) with this app added, then restarts
-//! the service so it reads it; "off" puts things back as they were. Root only;
-//! the app asks the Homebrew Channel to run `--capture-access on|off`.
+//! list is the one to join. "On" adds this app to that list (the file made from
+//! the system one if there is none), "off" takes only this app out, keeping
+//! everyone else's entries, and deletes the file only when what is left says
+//! nothing the system file does not. Either then restarts the service so it
+//! reads it. Root only; the app asks the Homebrew Channel to run
+//! `--capture-access on|off`. The pure edits are in `crate::rootside`.
 
 use super::tv::call;
+use crate::rootside::{self, WHITELIST_BACKUP as BACKUP, WHITELIST_SYSTEM as SYSTEM, WHITELIST_USER as USER};
 use serde_json::{Value, json};
 
-const SYSTEM: &str = "/etc/palm/whitelist-conf.json";
-const USER: &str = "/home/root/whitelist-conf.json";
-const BACKUP: &str = "/home/root/whitelist-conf.json.lg-c1-source.bak";
 const CLIENT: &str = super::APP_ID;
+
+/// The whitelist as this TV has it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Access {
+    /// This app is on the list.
+    pub listed: bool,
+    /// The capture service holds unlisted clients to it (webOS 6; a webOS 25
+    /// TV has the same files but lets the app capture anyway).
+    pub enforced: bool,
+}
+
+/// None when the TV has no such list (nothing to do).
+pub fn access() -> Option<Access> {
+    if !std::path::Path::new(SYSTEM).exists() {
+        return None;
+    }
+    let listed = std::fs::read_to_string(USER).is_ok_and(|t| rootside::whitelist_lists(&t, CLIENT));
+    let enforced = rootside::whitelist_enforced(&std::fs::read_to_string("/etc/os-release").unwrap_or_default());
+    Some(Access { listed, enforced })
+}
 
 /// Some(true) when we are on the list, Some(false) when the TV has the list and
 /// we are not on it, None when the TV has no such list (nothing to do).
 pub fn status() -> Option<bool> {
-    if !std::path::Path::new(SYSTEM).exists() {
-        return None;
-    }
-    let listed = std::fs::read_to_string(USER)
-        .ok()
-        .and_then(|t| serde_json::from_str::<Value>(&t).ok())
-        .and_then(|v| v.get("forceCaptureClient").and_then(Value::as_array).cloned())
-        .is_some_and(|l| l.iter().any(|c| c.as_str() == Some(CLIENT)));
-    Some(listed)
+    access().map(|a| a.listed)
 }
 
 /// Restarts the capture service so it reads its whitelist again
@@ -46,46 +58,58 @@ fn restart_service() {
     std::thread::sleep(std::time::Duration::from_millis(1500));
 }
 
+fn parse(text: &str) -> Option<Value> {
+    serde_json::from_str(text).ok()
+}
+
 /// Root only.
 pub fn set(on: bool) -> Result<(), String> {
     if status().is_none() {
         return Err("this TV has no capture whitelist (not needed)".into());
     }
-    if on {
-        let mut conf: Value = match std::fs::read_to_string(USER) {
-            Ok(t) => {
-                if !std::path::Path::new(BACKUP).exists() {
-                    std::fs::write(BACKUP, &t).map_err(|e| format!("{BACKUP}: {e}"))?;
-                }
-                serde_json::from_str(&t).map_err(|e| format!("{USER}: {e}"))?
-            }
-            Err(_) => serde_json::from_str(&std::fs::read_to_string(SYSTEM).map_err(|e| format!("{SYSTEM}: {e}"))?)
-                .map_err(|e| format!("{SYSTEM}: {e}"))?,
-        };
-        let list = conf
-            .as_object_mut()
-            .ok_or("whitelist is not an object")?
-            .entry("forceCaptureClient")
-            .or_insert_with(|| json!([]));
-        let arr = list.as_array_mut().ok_or("forceCaptureClient is not a list")?;
-        if !arr.iter().any(|c| c.as_str() == Some(CLIENT)) {
-            arr.push(json!(CLIENT));
-        }
-        let text = serde_json::to_string_pretty(&conf).map_err(|e| e.to_string())?;
-        std::fs::write(USER, text).map_err(|e| format!("{USER}: {e}"))?;
-    } else if std::path::Path::new(BACKUP).exists() {
-        std::fs::rename(BACKUP, USER).map_err(|e| format!("{USER}: {e}"))?;
-    } else {
-        let _ = std::fs::remove_file(USER);
+    let system = std::fs::read_to_string(SYSTEM).map_err(|e| format!("{SYSTEM}: {e}"))?;
+    // Earlier builds kept the user file aside here; one that says nothing more
+    // than the system file is of no use.
+    if let (Some(bak), Some(sys)) = (std::fs::read_to_string(BACKUP).ok().and_then(|t| parse(&t)), parse(&system))
+        && rootside::whitelist_same(&bak, &sys)
+    {
+        let _ = std::fs::remove_file(BACKUP);
     }
-    restart_service();
+    let current = std::fs::read_to_string(USER).ok();
+    let changed = if on {
+        let text = rootside::whitelist_add(current.as_deref().unwrap_or(&system), CLIENT).map_err(|e| format!("{USER}: {e}"))?;
+        if current.as_deref().and_then(parse) == parse(&text) {
+            false
+        } else {
+            super::takeover::write_atomic(USER, text.as_bytes(), 0o644)?;
+            true
+        }
+    } else {
+        match current {
+            None => false,
+            Some(cur) => match rootside::whitelist_remove(&cur, CLIENT, &system) {
+                None => {
+                    std::fs::remove_file(USER).map_err(|e| format!("{USER}: {e}"))?;
+                    true
+                }
+                Some(text) if parse(&text) != parse(&cur) => {
+                    super::takeover::write_atomic(USER, text.as_bytes(), 0o644)?;
+                    true
+                }
+                Some(_) => false,
+            },
+        }
+    };
+    if changed {
+        restart_service();
+    }
+    super::takeover::sync_hook();
     Ok(())
 }
 
 /// From the app: as root directly, else through the Homebrew Channel.
 pub fn request(on: bool) -> Result<(), String> {
-    // SAFETY: geteuid has no preconditions.
-    if unsafe { libc::geteuid() } == 0 {
+    if super::takeover::is_root() {
         return set(on);
     }
     let exe = std::env::current_exe().map_err(|e| e.to_string())?;
@@ -109,11 +133,15 @@ pub fn cli(arg: &str) -> i32 {
             return 2;
         }
     };
-    let state = match status() {
-        Some(true) => "granted",
-        Some(false) => "blocked",
+    let a = access();
+    let state = match a {
+        Some(Access { listed: true, .. }) => "granted",
+        Some(Access { listed: false, .. }) => "blocked",
         None => "not-needed",
     };
-    println!("{}", json!({ "access": state, "ok": result.is_ok(), "error": result.as_ref().err() }));
+    println!(
+        "{}",
+        json!({ "access": state, "enforced": a.map(|a| a.enforced), "ok": result.is_ok(), "error": result.as_ref().err() })
+    );
     if result.is_ok() { 0 } else { 1 }
 }
