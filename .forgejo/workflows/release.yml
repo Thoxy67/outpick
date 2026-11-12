@@ -5,8 +5,10 @@
 # Start one with `tools/release.sh X.Y.Z` (sets the version, writes CHANGELOG.md, commits and
 # tags), then `git push && git push origin vX.Y.Z`.
 #
-# The job's own token publishes the release (it may write releases of its repository). To use a
-# personal token instead, add a repository secret FORGEJO_TOKEN (scope write:repository).
+# The job's own token publishes the release (it may write releases of its repository) and
+# pushes the Homebrew Channel feed to the orphan branch "hbc" (contents write). To use a
+# personal token for the release instead, add a repository secret FORGEJO_TOKEN (scope
+# write:repository).
 # Runner label: repository variable FORGEJO_RUNNER (default "docker").
 name: Release
 
@@ -73,6 +75,8 @@ jobs:
           restore-keys: forgejo-tv-
       - name: webOS SDK and SDL-webOS (pinned, cached)
         run: node tools/setup-webos-sdk.mjs && node tools/webos-runtime.mjs
+      - name: Cargo.lock in step with Cargo.toml
+        run: cargo metadata --locked --format-version 1 >/dev/null
       - name: TV build
         run: tools/build-webos.sh --locked
       - name: Package
@@ -96,10 +100,24 @@ jobs:
           FORGEJO_REPO: ${{ github.repository }}
           FORGEJO_TOKEN: ${{ secrets.FORGEJO_TOKEN || github.token }}
         run: tools/release/forgejo-release.sh "${{ steps.v.outputs.tag }}" dist/release notes.md ${{ steps.v.outputs.prerelease }}
-      # The feed under a fixed URL for the TVs' Homebrew Channel (not for pre-releases).
-      # Needs a token with write:package: set the FORGEJO_TOKEN secret if the job token lacks it.
-      - name: Publish the Homebrew Channel repository
+      # The feed under a fixed URL for the TVs' Homebrew Channel (not for pre-releases): the
+      # orphan branch "hbc", <server>/<owner>/<repo>/raw/branch/hbc/repo.json, pushed with the
+      # checkout's own credentials. The URLs inside point at this tag's release assets.
+      - name: Publish the Homebrew Channel feed (branch hbc)
         if: steps.v.outputs.prerelease == ''
+        env:
+          GIT_AUTHOR_NAME: Forgejo Actions
+          GIT_AUTHOR_EMAIL: actions@noreply.invalid
+          GIT_COMMITTER_NAME: Forgejo Actions
+          GIT_COMMITTER_EMAIL: actions@noreply.invalid
+        run: tools/release/publish-feed-branch.sh "${{ steps.v.outputs.tag }}" dist/release origin
+      # TODO(remove after the first release with the hbc feed): the old feed URL, the generic
+      # package "latest" (delete + upload, needs write:package). TVs that still list it get
+      # one more update pointing them at the new URL in the README; then drop this step and
+      # tools/release/publish-repo.sh.
+      - name: Publish the Homebrew Channel repository (old generic package, to be removed)
+        if: steps.v.outputs.prerelease == ''
+        continue-on-error: true
         env:
           FORGEJO_URL: ${{ github.server_url }}
           FORGEJO_REPO: ${{ github.repository }}

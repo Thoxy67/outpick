@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# DEPRECATED, to be removed after one release: replaced by tools/release/publish-feed-branch.sh
+# (the orphan branch "hbc", no delete + upload window, no write:package token).
+#
 # Publishes the Homebrew Channel feed under a fixed URL, so a TV keeps one repository entry and
 # sees every new release: the Forgejo generic package <name>, version "latest".
 #

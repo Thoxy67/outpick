@@ -12,7 +12,8 @@ Writes into DIR, next to the release's .ipk:
 Every URL points at this release's assets on Forgejo
 (<server>/<owner>/<repo>/releases/download/<TAG>/<file>), so a feed always installs the
 build it was written with. The release workflow also publishes repo.json under a fixed URL
-(the generic package "latest", tools/release/publish-repo.sh) for the TV's repository list.
+for the TV's repository list: the orphan branch "hbc" (tools/release/publish-feed-branch.sh),
+<server>/<owner>/<repo>/raw/branch/hbc/repo.json.
 
 Env: FORGEJO_URL (https://git.example.org), FORGEJO_REPO (owner/name); in Actions these come
 from github.server_url and github.repository.
@@ -60,8 +61,11 @@ def main() -> int:
         "appDescription": APPINFO["appDescription"],
         "iconUri": icon_uri,
         "sourceUrl": source_url,
-        # The Source key takeover, the capture access and the settings folder need root.
-        "rootRequired": True,
+        # The picker itself runs without root; only the Source key takeover, the capture access
+        # (previews on webOS 6) and the settings-folder permission fix need it. The Homebrew
+        # Channel shows "optional" as such (frontend/views/DetailsPanel.js), and the apps-repo
+        # manifest type allows it (repogen/pkg_manifest.py: bool | Literal['optional']).
+        "rootRequired": "optional",
         "ipkUrl": f"{release_url}/{ipk_name}",
         "ipkHash": {"sha256": hashlib.sha256(ipk).hexdigest()},
         "ipkSize": len(ipk),

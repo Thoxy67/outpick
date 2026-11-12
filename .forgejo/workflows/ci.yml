@@ -54,5 +54,13 @@ jobs:
         run: |
           python3 tools/package.py
           ls -l target/armv7-unknown-linux-gnueabi/release/source-picker dist/
+      - name: Package is reproducible (twice, same sha256)
+        run: |
+          git config --global --add safe.directory "$PWD"
+          a="$(python3 tools/package.py | head -1)"; h1="$(sha256sum "$a" | cut -d' ' -f1)"
+          sleep 2
+          b="$(python3 tools/package.py | head -1)"; h2="$(sha256sum "$b" | cut -d' ' -f1)"
+          echo "$h1  $a"; echo "$h2  $b"
+          [ "$h1" = "$h2" ] || { echo "::error::tools/package.py is not reproducible"; exit 1; }
       - name: Release notes since the last tag (preview)
         run: tools/release/changelog.py
