@@ -39,7 +39,6 @@ hint.toggle = Afficher / masquer
 hint.next_icon = Icône suivante
 hint.rename = Renommer
 hint.drop = Poser
-hint.save = Enregistrer
 hint.confirm = Valider
 hint.cancel = Annuler
 hint.cec_options = Options CEC
@@ -215,7 +214,6 @@ sources.hidden = Masquée
 sources.icon = Icône : {name}
 sources.renamed_from = Nom TV : {name}
 rename.title = Renommer
-rename.help = Tapez un nom · OK pour enregistrer · RETOUR pour annuler
 rename.empty = Vide = le nom donné par la TV
 
 # Icônes
