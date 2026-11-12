@@ -1128,9 +1128,12 @@ impl App {
             Layout::List => (vec2(560.0, 84.0) * s, 8.0 * s, 1, n.max(1)),
             Layout::Sidebar => (vec2(440.0, 84.0) * s, 8.0 * s, 1, n.max(1)),
         };
+        // In a list, the selected row pushes its neighbours apart so its ring never
+        // touches them: rows above stay, it moves one step down, rows below two.
+        let push = if vertical(self.cfg.layout) { 9.0 * s } else { 0.0 };
         let content = vec2(
             cols as f32 * tile.x + cols.saturating_sub(1) as f32 * gap,
-            rows as f32 * tile.y + rows.saturating_sub(1) as f32 * gap,
+            rows as f32 * tile.y + rows.saturating_sub(1) as f32 * gap + 2.0 * push,
         );
         // The panel is at least as wide as its key hints (the Sidebar keeps its width and
         // compacts them instead).
@@ -1162,6 +1165,14 @@ impl App {
             let (c, r) = (i % cols, i / cols);
             Rect::from_min_size(pos2(area.min.x + c as f32 * (tile.x + gap), area.min.y + r as f32 * (tile.y + gap)), tile)
         };
+        let sel_now = self.sel;
+        let offsets: Vec<f32> = (0..n)
+            .map(|i| {
+                let want = if push == 0.0 { 0.0 } else if i < sel_now { 0.0 } else if i == sel_now { push } else { 2.0 * push };
+                self.anim(ui, &format!("push-{i}"), want, 0.16)
+            })
+            .collect();
+        let cell = |i: usize| -> Rect { cell(i).translate(vec2(0.0, offsets.get(i).copied().unwrap_or(0.0))) };
         let target = cell(self.sel);
         let overflow_x = (content.x - area.width()).max(0.0);
         let overflow_y = (content.y - area.height()).max(0.0);
