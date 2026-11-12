@@ -4,7 +4,10 @@
 //! `home.js` do. LS2 calls go through Luma's FFI; `luna-send` is the fallback.
 
 use super::luna;
-use crate::model::{Backend, Command, Shared, Source, SourceKind, icon_from_tv};
+use crate::model::{Backend, Command, Preview, Shared, Source, SourceKind, decode_bmp, icon_from_tv};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU32, Ordering};
+use std::time::Instant;
 use serde_json::{Value, json};
 use std::sync::mpsc;
 use std::thread::JoinHandle;
@@ -22,6 +25,98 @@ pub(crate) fn call(uri: &str, payload: &Value) -> Result<Value, String> {
                 .map_err(|e| format!("{ffi}; luna-send: {e}"))?;
             serde_json::from_slice(&out.stdout).map_err(|e| format!("{ffi}; luna-send: {e}"))
         }
+    }
+}
+
+/// Pictures for the tiles. While the picker is open, the input in front is
+/// captured (video plane only, so not the picker itself) a few times a second,
+/// to `preview-<id>.bmp` in the shared folder; every input keeps its last
+/// picture there, shown until it is seen again. webOS 6 refuses video
+/// capture even to root, so there it stops at once and the tiles stay plain.
+/// Set when capture access changes, so a stopped preview loop tries again.
+static PREVIEW_RETRY: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+fn preview_loop(state: Shared, fps: Arc<AtomicU32>, repaint: impl Fn()) {
+    let dir = super::takeover::DIR;
+    let path_of = |id: &str| format!("{dir}/preview-{id}.bmp");
+    // Last pictures from earlier sessions.
+    {
+        let ids: Vec<String> = state.lock().unwrap().sources.iter().map(|s| s.id.clone()).chain([String::from("LIVE_TV")]).collect();
+        let mut st = state.lock().unwrap();
+        for id in ids {
+            if let Some((width, height, rgba)) = std::fs::read(path_of(&id)).ok().and_then(|b| decode_bmp(&b)) {
+                st.previews.insert(id, Preview { width, height, rgba: Arc::new(rgba), seq: 1, live: false });
+            }
+        }
+    }
+    repaint();
+    let mut seq = 1u64;
+    let mut via_root = false;
+    loop {
+        let rate = fps.load(Ordering::Relaxed);
+        if rate == 0 {
+            std::thread::sleep(Duration::from_millis(250));
+            continue;
+        }
+        let started = Instant::now();
+        let period = Duration::from_millis(1000 / rate.max(1) as u64);
+        // The source whose app is in front (an HDMI input, or Live TV).
+        let id = {
+            let st = state.lock().unwrap();
+            let front = st.foreground.clone().unwrap_or_default();
+            if front == "com.webos.app.livetv" {
+                Some("LIVE_TV".to_string())
+            } else {
+                st.sources.iter().find(|s| s.app_id == front && s.kind == SourceKind::Hdmi).map(|s| s.id.clone())
+            }
+        };
+        if let Some(id) = id {
+            let _ = super::takeover::open_dir();
+            let path = path_of(&id);
+            let payload = json!({ "path": path, "method": "VIDEO", "width": 320, "height": 180, "format": "BMP" });
+            let result = if via_root {
+                let cmd = format!("luna-send -n 1 -w 3000 luna://com.webos.service.capture/executeOneShot '{payload}'");
+                call("luna://org.webosbrew.hbchannel.service/exec", &json!({ "command": cmd }))
+                    .and_then(|v| serde_json::from_str::<Value>(v.get("stdoutString").and_then(Value::as_str).unwrap_or("{}")).map_err(|e| e.to_string()))
+            } else {
+                call("luna://com.webos.service.capture/executeOneShot", &payload)
+            };
+            match result {
+                Ok(v) if v.get("returnValue").and_then(Value::as_bool) == Some(true) => {
+                    if let Some((width, height, rgba)) = std::fs::read(&path).ok().and_then(|b| decode_bmp(&b)) {
+                        seq += 1;
+                        let mut st = state.lock().unwrap();
+                        st.preview_supported = Some(true);
+                        for p in st.previews.values_mut() {
+                            p.live = false;
+                        }
+                        st.previews.insert(id, Preview { width, height, rgba: Arc::new(rgba), seq, live: true });
+                        drop(st);
+                        repaint();
+                    }
+                }
+                Ok(v) => {
+                    let denied = v.get("errorText").and_then(Value::as_str).unwrap_or("").contains("PERMISSION");
+                    // SAFETY: geteuid has no preconditions.
+                    if denied && !via_root && unsafe { libc::geteuid() } != 0 {
+                        via_root = true; // the jailed app may not capture; root may
+                        continue;
+                    }
+                    eprintln!("preview: {v}");
+                    state.lock().unwrap().preview_supported = Some(false);
+                    repaint();
+                    // Wait for capture access to change (Customize), then try again.
+                    while !PREVIEW_RETRY.swap(false, Ordering::Relaxed) {
+                        std::thread::sleep(Duration::from_millis(300));
+                    }
+                    via_root = false;
+                    state.lock().unwrap().preview_supported = None;
+                    continue;
+                }
+                Err(e) => eprintln!("preview: {e}"),
+            }
+        }
+        std::thread::sleep(period.saturating_sub(started.elapsed()));
     }
 }
 
@@ -188,6 +283,7 @@ pub fn start(repaint: impl Fn() + Send + Sync + Clone + 'static) -> (Backend, Jo
     let state: Shared = Default::default();
     let (tx, rx) = mpsc::channel::<Command>();
 
+    let repaint_for_preview = repaint.clone();
     let s = state.clone();
     let worker = std::thread::Builder::new()
         .name("tv".into())
@@ -250,6 +346,7 @@ pub fn start(repaint: impl Fn() + Send + Sync + Clone + 'static) -> (Backend, Jo
                 }
             }
             refresh(&s);
+            s.lock().unwrap().capture_access = super::capture::status();
             {
                 let home = detect_home();
                 let owner = super::takeover::detect();
@@ -264,6 +361,21 @@ pub fn start(repaint: impl Fn() + Send + Sync + Clone + 'static) -> (Backend, Jo
                     Command::Refresh => {
                         refresh(&s);
                         s.lock().unwrap().key_owner = super::takeover::detect();
+                    }
+                    Command::CaptureAccess(on) => {
+                        {
+                            let mut st = s.lock().unwrap();
+                            st.takeover_busy = true;
+                            st.takeover_error = None;
+                        }
+                        repaint();
+                        let result = super::capture::request(on);
+                        let mut st = s.lock().unwrap();
+                        st.takeover_busy = false;
+                        st.takeover_error = result.err();
+                        st.capture_access = super::capture::status();
+                        drop(st);
+                        PREVIEW_RETRY.store(true, Ordering::Relaxed);
                     }
                     Command::Cec { app_id, key } => {
                         // CEC keys go to the active input's device: switch there first.
@@ -304,5 +416,10 @@ pub fn start(repaint: impl Fn() + Send + Sync + Clone + 'static) -> (Backend, Jo
             }
         })
         .expect("spawn tv thread");
-    (Backend { state, commands: tx }, worker)
+    let preview_fps = Arc::new(AtomicU32::new(0));
+    {
+        let (st, fps, r) = (state.clone(), preview_fps.clone(), repaint_for_preview);
+        let _ = std::thread::Builder::new().name("preview".into()).spawn(move || preview_loop(st, fps, r));
+    }
+    (Backend { state, commands: tx, preview_fps }, worker)
 }

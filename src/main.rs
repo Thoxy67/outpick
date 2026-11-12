@@ -29,6 +29,9 @@ fn main() {
                 }
             });
         }
+        if let Some(i) = args.iter().position(|a| a == "--capture-access") {
+            std::process::exit(webos::capture::cli(args.get(i + 1).map(String::as_str).unwrap_or("status")));
+        }
         if let Some(i) = args.iter().position(|a| a == "--takeover") {
             std::process::exit(webos::takeover::cli(args.get(i + 1).map(String::as_str).unwrap_or("status")));
         }

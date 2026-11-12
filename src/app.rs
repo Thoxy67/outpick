@@ -129,6 +129,9 @@ enum Item {
     ShowDevices,
     ShowLiveTv,
     Naming,
+    ShowPreviews,
+    PreviewFps,
+    CaptureAccess,
     ShowHome,
     ShowUsb,
     ShowMediaServers,
@@ -145,7 +148,7 @@ const SECTIONS: &[(&str, &[Item])] = &[
     ("section.general", &[Item::Language]),
     ("section.appearance", &[Item::Theme, Item::Accent, Item::Corners, Item::Size, Item::Opacity, Item::Dim, Item::Animations]),
     ("section.layout", &[Item::Layout, Item::Position, Item::ShowIcons, Item::ShowHeader, Item::ShowHints]),
-    ("section.content", &[Item::Naming, Item::ShowHome, Item::ShowDisconnected, Item::ShowDevices, Item::ShowLiveTv, Item::ShowUsb, Item::ShowMediaServers]),
+    ("section.content", &[Item::Naming, Item::ShowPreviews, Item::PreviewFps, Item::CaptureAccess, Item::ShowHome, Item::ShowDisconnected, Item::ShowDevices, Item::ShowLiveTv, Item::ShowUsb, Item::ShowMediaServers]),
     ("section.behaviour", &[Item::AutoClose, Item::AutoSwitch]),
     ("section.remote", &[Item::SourceKey, Item::RestoreLg]),
     ("section.sources", &[Item::Sources, Item::Reset]),
@@ -166,13 +169,14 @@ fn row_kind_of(item: Item, cfg: &Config) -> RowKind {
         Item::ShowHeader => RowKind::Toggle(cfg.show_header),
         Item::ShowHints => RowKind::Toggle(cfg.show_hints),
         Item::ShowHome => RowKind::Toggle(cfg.show_home),
+        Item::ShowPreviews => RowKind::Toggle(cfg.show_previews),
         Item::ShowDisconnected => RowKind::Toggle(cfg.show_disconnected),
         Item::ShowDevices => RowKind::Toggle(cfg.show_device_names),
         Item::ShowLiveTv => RowKind::Toggle(cfg.show_live_tv),
         Item::ShowUsb => RowKind::Toggle(cfg.show_usb),
         Item::ShowMediaServers => RowKind::Toggle(cfg.show_media_servers),
         Item::Sources => RowKind::Page,
-        Item::Reset | Item::RestoreLg => RowKind::Button,
+        Item::Reset | Item::RestoreLg | Item::CaptureAccess => RowKind::Button,
         _ => RowKind::Choice,
     }
 }
@@ -245,6 +249,8 @@ pub struct App {
     last_click: f64,
     /// Place the highlight without gliding (on open, when the current source is first known).
     snap: bool,
+    /// Source pictures uploaded to the GPU, by source id, with the frame they hold.
+    preview_tex: std::collections::HashMap<String, (u64, egui::TextureHandle)>,
     scroll: f32,
 }
 
@@ -272,6 +278,7 @@ impl App {
             hits: Default::default(),
             last_click: f64::NEG_INFINITY,
             snap: true,
+            preview_tex: Default::default(),
         }
     }
 
@@ -400,6 +407,7 @@ impl App {
             self.last_key = opened;
         }
         let st = self.backend.state.lock().map(|s| s.clone()).unwrap_or_default();
+        self.sync_previews(&ctx, &st);
 
         // Fade in, and out before closing.
         let fade_in = if self.cfg.animations { ease(((now - opened) / 0.16) as f32) } else { 1.0 };
@@ -586,6 +594,51 @@ impl App {
         }
     }
 
+    /// Asks for live pictures (or none), and uploads frames that changed.
+    fn sync_previews(&mut self, ctx: &egui::Context, st: &TvState) {
+        let on = self.cfg.show_previews && st.preview_supported != Some(false) && self.closing.is_none();
+        self.backend.set_preview_fps(if on { self.cfg.preview_fps.clamp(1, 4) } else { 0 });
+        if !self.cfg.show_previews {
+            return;
+        }
+        for (id, pv) in &st.previews {
+            if self.preview_tex.get(id).is_some_and(|(seq, _)| *seq == pv.seq) {
+                continue;
+            }
+            let image = egui::ColorImage::from_rgba_unmultiplied([pv.width, pv.height], &pv.rgba);
+            match self.preview_tex.get_mut(id) {
+                Some((seq, tex)) => {
+                    tex.set(image, egui::TextureOptions::LINEAR);
+                    *seq = pv.seq;
+                }
+                None => {
+                    let tex = ctx.load_texture(format!("preview-{id}"), image, egui::TextureOptions::LINEAR);
+                    self.preview_tex.insert(id.clone(), (pv.seq, tex));
+                }
+            }
+        }
+    }
+
+    /// A source's picture filling `rect` (cropped to cover), darkened so the
+    /// tile's text stays readable; the live one less than a remembered one.
+    fn paint_preview(&self, p: &egui::Painter, rect: Rect, radius: f32, id: &str, live: bool, alpha: f32) -> bool {
+        let Some((_, tex)) = self.preview_tex.get(id).filter(|_| self.cfg.show_previews) else { return false };
+        let [w, h] = tex.size();
+        let (img_a, rect_a) = (w as f32 / h.max(1) as f32, rect.width() / rect.height().max(1.0));
+        let uv = if rect_a < img_a {
+            let u = rect_a / img_a;
+            Rect::from_min_max(pos2((1.0 - u) / 2.0, 0.0), pos2((1.0 + u) / 2.0, 1.0))
+        } else {
+            let v = img_a / rect_a;
+            Rect::from_min_max(pos2(0.0, (1.0 - v) / 2.0), pos2(1.0, (1.0 + v) / 2.0))
+        };
+        let tint = veil(Color32::WHITE, alpha);
+        p.add(egui::epaint::RectShape::filled(rect, radius, tint).with_texture(tex.id(), uv));
+        let shade = if live { 0.42 } else { 0.62 };
+        p.rect_filled(rect, radius, Color32::from_black_alpha((shade * alpha * 255.0) as u8));
+        true
+    }
+
     /// The key that opens CEC options in this layout.
     fn options_key_nav(&self) -> Nav {
         if vertical(self.cfg.layout) { Nav::Right } else { Nav::Down }
@@ -681,6 +734,12 @@ impl App {
                 self.adjust(all[sel], if *k == Nav::Left { -1 } else { 1 });
                 self.retheme(ctx);
             }
+            Nav::Ok if all[sel] == Item::CaptureAccess => {
+                let st = self.backend.state.lock().map(|s| s.clone()).unwrap_or_default();
+                if self.button_caption(Item::CaptureAccess, false, &st).1 {
+                    let _ = self.backend.commands.send(Command::CaptureAccess(st.capture_access != Some(true)));
+                }
+            }
             Nav::Ok if all[sel] == Item::RestoreLg => {
                 let st = self.backend.state.lock().map(|s| s.clone()).unwrap_or_default();
                 if self.button_caption(Item::RestoreLg, false, &st).1 {
@@ -746,12 +805,14 @@ impl App {
             Item::ShowDevices => c.show_device_names = !c.show_device_names,
             Item::ShowLiveTv => c.show_live_tv = !c.show_live_tv,
             Item::Naming => c.naming = cycle(&Naming::ALL, c.naming, dir),
+            Item::ShowPreviews => c.show_previews = !c.show_previews,
+            Item::PreviewFps => c.preview_fps = cycle(&[1, 2, 4], c.preview_fps, dir),
             Item::ShowHome => c.show_home = !c.show_home,
             Item::ShowUsb => c.show_usb = !c.show_usb,
             Item::ShowMediaServers => c.show_media_servers = !c.show_media_servers,
             Item::AutoClose => c.auto_close_secs = cycle(&[0, 5, 10, 15, 30, 60], c.auto_close_secs, dir),
             Item::AutoSwitch => c.auto_switch_secs = cycle(&[0, 1, 2, 3, 5], c.auto_switch_secs, dir),
-            Item::Sources | Item::Reset | Item::SourceKey | Item::RestoreLg => {}
+            Item::Sources | Item::Reset | Item::SourceKey | Item::RestoreLg | Item::CaptureAccess => {}
         }
     }
 
@@ -1090,10 +1151,17 @@ impl App {
             }
             let base = veil(mix(k.field, k.card, 0.35), alpha * self.cfg.panel_opacity.max(0.75));
             clip.rect(rect_i, r, base, Stroke::new(1.0, veil(k.field_border, alpha * 0.6)), StrokeKind::Inside);
+            if let Some(e) = entries.get(i) {
+                let live = st.previews.get(&e.source.id).is_some_and(|p| p.live);
+                if self.paint_preview(&clip, rect_i, r, &e.source.id, live, alpha) {
+                    clip.rect_stroke(rect_i, r, Stroke::new(1.0, veil(k.field_border, alpha * 0.6)), StrokeKind::Inside);
+                }
+            }
             self.add_hit(rect_i.intersect(area), Hit::Tile(i));
         }
         if n > 0 {
-            clip.rect_filled(hl, r, veil(k.hover, alpha));
+            let pictured = entries.get(self.sel).is_some_and(|e| self.cfg.show_previews && self.preview_tex.contains_key(&e.source.id));
+            clip.rect_filled(hl, r, veil(k.hover, alpha * if pictured { 0.25 } else { 1.0 }));
             clip.rect_stroke(hl.expand(5.0 * s), r + 5.0 * s, Stroke::new(3.0 * s, veil(k.accent, alpha)), StrokeKind::Outside);
         }
         for i in 0..n {
@@ -1220,6 +1288,11 @@ impl App {
     fn button_caption(&self, item: Item, confirm_reset: bool, st: &TvState) -> (&'static str, bool) {
         match item {
             Item::Reset => (t(if confirm_reset { "settings.reset_confirm_button" } else { "settings.reset_button" }), true),
+            Item::CaptureAccess => match st.capture_access {
+                Some(true) => (t("capture.restore_button"), !st.takeover_busy),
+                Some(false) => (t("capture.allow_button"), !st.takeover_busy),
+                None => (t("capture.allow_button"), false),
+            },
             _ => (
                 t("settings.restore_button"),
                 !st.takeover_busy && !matches!(st.key_owner, KeyOwner::Lg | KeyOwner::Unsupported),
@@ -1265,6 +1338,25 @@ impl App {
             Item::ShowDevices => ("tv", t("settings.show_devices"), onoff(c.show_device_names)),
             Item::ShowLiveTv => ("radio-tower", t("settings.show_live_tv"), onoff(c.show_live_tv)),
             Item::Naming => ("type", t("settings.naming"), c.naming.label().into()),
+            Item::ShowPreviews => (
+                "monitor",
+                t("settings.show_previews"),
+                if st.preview_supported == Some(false) { t("value.unavailable").into() } else { onoff(c.show_previews) },
+            ),
+            Item::PreviewFps => ("timer", t("settings.preview_fps"), tf("value.fps", &[("n", &c.preview_fps.to_string())])),
+            Item::CaptureAccess => (
+                "monitor",
+                t("settings.capture_access"),
+                match st.capture_access {
+                    _ if st.takeover_busy => t("remote.applying").into(),
+                    Some(true) => t("capture.granted").into(),
+                    // Capture works now, but LG can switch it off (DRM, some apps):
+                    // allowing keeps the previews working then too.
+                    Some(false) if st.preview_supported == Some(true) => t("capture.works").into(),
+                    Some(false) => t("capture.blocked").into(),
+                    None => t("capture.not_needed").into(),
+                },
+            ),
             Item::ShowHome => ("house", t("settings.show_home"), onoff(c.show_home)),
             Item::ShowUsb => ("usb", t("settings.show_usb"), onoff(c.show_usb)),
             Item::ShowMediaServers => ("server", t("settings.show_media_servers"), onoff(c.show_media_servers)),

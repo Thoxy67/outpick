@@ -165,6 +165,10 @@ pub struct Config {
     pub dim: f32,
     /// How inputs are named.
     pub naming: Naming,
+    /// Pictures of the sources in their tiles (live for the one in front).
+    pub show_previews: bool,
+    /// Live picture rate while the picker is open (1, 2 or 4 per second).
+    pub preview_fps: u32,
     pub show_disconnected: bool,
     pub show_device_names: bool,
     pub show_live_tv: bool,
@@ -204,6 +208,8 @@ impl Default for Config {
             panel_opacity: 0.92,
             dim: 0.35,
             naming: Naming::Device,
+            show_previews: true,
+            preview_fps: 2,
             show_disconnected: true,
             show_device_names: true,
             show_live_tv: true,

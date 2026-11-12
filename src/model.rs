@@ -1,6 +1,8 @@
 //! Sources as the TV reports them, and the backend that lists and switches them.
 
 use crate::icons::SourceIcon;
+use std::collections::HashMap;
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex, mpsc};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -207,6 +209,51 @@ pub fn cec_vendor(id: u64) -> Option<&'static str> {
     })
 }
 
+/// A source's picture: the live one for the input in front, else the last seen.
+#[derive(Clone)]
+pub struct Preview {
+    pub width: usize,
+    pub height: usize,
+    /// RGBA, top row first.
+    pub rgba: Arc<Vec<u8>>,
+    /// Bumped at each new frame, so the UI re-uploads only what changed.
+    pub seq: u64,
+    /// Captured while the picker is open (the input in front), not a stored one.
+    pub live: bool,
+}
+
+/// Decodes the uncompressed 24/32-bit BMP the TV's capture service writes.
+pub fn decode_bmp(b: &[u8]) -> Option<(usize, usize, Vec<u8>)> {
+    let u32_at = |o: usize| b.get(o..o + 4).map(|x| u32::from_le_bytes([x[0], x[1], x[2], x[3]]));
+    let i32_at = |o: usize| u32_at(o).map(|v| v as i32);
+    if b.get(0..2)? != b"BM" {
+        return None;
+    }
+    let data = u32_at(10)? as usize;
+    let w = i32_at(18)?;
+    let h = i32_at(22)?;
+    let bpp = u16::from_le_bytes([*b.get(28)?, *b.get(29)?]) as usize;
+    if w <= 0 || h == 0 || !(bpp == 24 || bpp == 32) || u32_at(30)? != 0 && u32_at(30)? != 3 {
+        return None;
+    }
+    let (w, top_down, h) = (w as usize, h < 0, h.unsigned_abs() as usize);
+    let stride = (w * bpp / 8).div_ceil(4) * 4;
+    let mut rgba = vec![0u8; w * h * 4];
+    for y in 0..h {
+        let src_row = if top_down { y } else { h - 1 - y };
+        let row = b.get(data + src_row * stride..data + src_row * stride + w * bpp / 8)?;
+        for x in 0..w {
+            let px = &row[x * bpp / 8..];
+            let o = (y * w + x) * 4;
+            rgba[o] = px[2];
+            rgba[o + 1] = px[1];
+            rgba[o + 2] = px[0];
+            rgba[o + 3] = 255;
+        }
+    }
+    Some((w, h, rgba))
+}
+
 /// What the TV side tells the UI. Written by the backend thread, read every frame.
 #[derive(Default, Clone)]
 pub struct TvState {
@@ -223,6 +270,12 @@ pub struct TvState {
     pub key_owner: KeyOwner,
     pub takeover_busy: bool,
     pub takeover_error: Option<String>,
+    /// Pictures by source id (live for the input in front, else last seen).
+    pub previews: HashMap<String, Preview>,
+    /// Whether this TV lets us capture the picture (None until tried).
+    pub preview_supported: Option<bool>,
+    /// webOS 6 capture whitelist: Some(true) listed, Some(false) not, None not needed.
+    pub capture_access: Option<bool>,
 }
 
 pub type Shared = Arc<Mutex<TvState>>;
@@ -236,12 +289,22 @@ pub enum Command {
     /// Sends a SIMPLINK (HDMI-CEC) key to the device on input `app_id`,
     /// switching to it first: LG only sends CEC keys to the active input.
     Cec { app_id: String, key: u32 },
+    /// Adds this app to (true) or removes it from (false) the webOS 6 capture whitelist.
+    CaptureAccess(bool),
 }
 
 /// A TV (or a mock): fills `Shared` from a worker thread and takes commands.
 pub struct Backend {
     pub state: Shared,
     pub commands: mpsc::Sender<Command>,
+    /// Live preview rate the UI wants (pictures per second, 0 = off).
+    pub preview_fps: Arc<AtomicU32>,
+}
+
+impl Backend {
+    pub fn set_preview_fps(&self, fps: u32) {
+        self.preview_fps.store(fps, Ordering::Relaxed);
+    }
 }
 
 /// Mock inputs for the desktop preview, shaped like the C1's.
@@ -299,14 +362,38 @@ pub fn mock_backend(repaint: impl Fn() + Send + 'static) -> Backend {
             st.loaded = true;
         }
         repaint();
+        // Fake pictures: a moving "live" one for the input in front, a still one for HDMI 2.
+        {
+            let picture = |hue: f32, phase: f32| {
+                let (w, h) = (320usize, 180usize);
+                let mut rgba = vec![255u8; w * h * 4];
+                for y in 0..h {
+                    for x in 0..w {
+                        let o = (y * w + x) * 4;
+                        let t = x as f32 / w as f32;
+                        let band = (((t * 6.0 + phase).sin() * 0.5 + 0.5) * 60.0) as u8;
+                        rgba[o] = (40.0 + 150.0 * hue * (1.0 - t)) as u8 + band / 2;
+                        rgba[o + 1] = (60.0 + 80.0 * (y as f32 / h as f32)) as u8;
+                        rgba[o + 2] = (90.0 + 120.0 * t) as u8;
+                    }
+                }
+                Arc::new(rgba)
+            };
+            let mut st = s.lock().unwrap();
+            st.preview_supported = Some(true);
+            st.previews.insert("HDMI_2".into(), Preview { width: 320, height: 180, rgba: picture(0.2, 1.0), seq: 1, live: false });
+            st.previews.insert("HDMI_1".into(), Preview { width: 320, height: 180, rgba: picture(1.0, 0.0), seq: 1, live: true });
+        }
+        repaint();
         while let Ok(cmd) = rx.recv() {
             match cmd {
                 Command::Launch(app, _) => s.lock().unwrap().foreground = Some(app),
                 Command::Takeover(on) => s.lock().unwrap().key_owner = if on { KeyOwner::Picker } else { KeyOwner::Lg },
+                Command::CaptureAccess(on) => s.lock().unwrap().capture_access = Some(on),
                 Command::Refresh | Command::Cec { .. } => {}
             }
             repaint();
         }
     });
-    Backend { state, commands: tx }
+    Backend { state, commands: tx, preview_fps: Arc::new(AtomicU32::new(0)) }
 }

@@ -12,6 +12,17 @@ source.home = Home
 settings.naming = Input names
 naming.device = Device plugged in
 naming.tv = TV label
+settings.show_previews = Source previews
+settings.preview_fps = Preview rate
+value.fps = {n} / s
+value.unavailable = Not on this TV
+settings.capture_access = Video capture (webOS 6)
+capture.granted = Allowed for this app
+capture.works = Works now; allow to keep it working
+capture.blocked = Blocked by the TV
+capture.not_needed = Not needed on this TV
+capture.allow_button = Allow
+capture.restore_button = Restore
 settings.show_home = Show Home
 source.live_tv = Live TV
 

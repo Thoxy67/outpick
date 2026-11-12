@@ -3,6 +3,7 @@
 //! SDL events. The window is cleared to transparent so the picture can show
 //! through where the compositor allows it.
 
+pub mod capture;
 mod compat;
 mod luna;
 mod overlay;
