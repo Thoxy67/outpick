@@ -4,6 +4,7 @@
 //! the default build is a desktop preview with mock inputs for designing the UI.
 
 mod app;
+mod clock;
 mod config;
 mod i18n;
 mod icons;

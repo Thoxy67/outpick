@@ -118,6 +118,8 @@ enum Screen {
     StylePick { sel: usize },
     /// A screen in a 3×3 grid where the arrows move the panel; `sel` indexes `POSITION_GRID`.
     PositionPick { sel: usize },
+    /// Moving the clock over the whole screen (the interface shown faded); `orig` is restored on Back.
+    ClockPlace { orig: crate::config::ClockConfig },
 }
 
 /// Columns of a Sources row.
@@ -135,6 +137,7 @@ enum Item {
     Accent,
     Corners,
     Size,
+    ShowPanel,
     Opacity,
     Dim,
     Animations,
@@ -155,6 +158,12 @@ enum Item {
     ShowMediaServers,
     AutoClose,
     AutoSwitch,
+    ClockShow,
+    ClockStyle,
+    ClockSize,
+    Clock24h,
+    ClockSeconds,
+    ClockPlace,
     SourceKey,
     MultikeyOpens,
     RestoreLg,
@@ -165,10 +174,11 @@ enum Item {
 /// Customize, section by section: (section title key, its options).
 const SECTIONS: &[(&str, &[Item])] = &[
     ("section.general", &[Item::Language]),
-    ("section.appearance", &[Item::Theme, Item::Accent, Item::Corners, Item::Size, Item::Opacity, Item::Dim, Item::Animations]),
+    ("section.appearance", &[Item::Theme, Item::Accent, Item::Corners, Item::Size, Item::ShowPanel, Item::Opacity, Item::Dim, Item::Animations]),
     ("section.layout", &[Item::Layout, Item::Position, Item::ShowIcons, Item::ShowHeader, Item::ShowHints]),
     ("section.content", &[Item::Naming, Item::ShowPreviews, Item::PreviewFps, Item::CaptureAccess, Item::ShowHome, Item::ShowDisconnected, Item::ShowDevices, Item::ShowLiveTv, Item::ShowUsb, Item::ShowMediaServers]),
     ("section.behaviour", &[Item::AutoClose, Item::AutoSwitch]),
+    ("section.clock", &[Item::ClockShow, Item::ClockStyle, Item::ClockSize, Item::Clock24h, Item::ClockSeconds, Item::ClockPlace]),
     ("section.remote", &[Item::SourceKey, Item::MultikeyOpens, Item::RestoreLg]),
     ("section.sources", &[Item::Sources, Item::Reset]),
 ];
@@ -183,6 +193,12 @@ fn row_kind_of(item: Item, cfg: &Config) -> RowKind {
         Item::Size => RowKind::Slider(0.7, 1.5),
         Item::Opacity => RowKind::Slider(0.4, 1.0),
         Item::Dim => RowKind::Slider(0.0, 0.8),
+        Item::ClockSize => RowKind::Slider(0.4, 3.0),
+        Item::ShowPanel => RowKind::Toggle(cfg.show_panel),
+        Item::ClockShow => RowKind::Toggle(cfg.clock.show),
+        Item::Clock24h => RowKind::Toggle(cfg.clock.hour24),
+        Item::ClockSeconds => RowKind::Toggle(cfg.clock.seconds),
+        Item::ClockPlace => RowKind::Page,
         Item::Animations => RowKind::Toggle(cfg.animations),
         Item::ShowIcons => RowKind::Toggle(cfg.show_icons),
         Item::ShowHeader => RowKind::Toggle(cfg.show_header),
@@ -450,6 +466,12 @@ impl App {
         for k in keys {
             match k {
                 Nav::Pointer(pos) => translated.extend(self.hover(*pos)),
+                // Placing the clock: a click puts it there.
+                Nav::Click(pos) if matches!(self.screen, Screen::ClockPlace { .. }) => {
+                    let r = ui.max_rect();
+                    self.cfg.clock.x = ((pos.x - r.min.x) / r.width()).clamp(0.0, 1.0);
+                    self.cfg.clock.y = ((pos.y - r.min.y) / r.height()).clamp(0.0, 1.0);
+                }
                 Nav::Click(pos) => {
                     self.last_click = now;
                     translated.extend(self.click(*pos));
@@ -481,6 +503,7 @@ impl App {
                 Screen::Rename { .. } => self.rename_key(k),
                 Screen::Options { .. } => self.options_key(k, &st, now),
                 Screen::StylePick { .. } | Screen::PositionPick { .. } => self.pick_key(k, &ctx),
+                Screen::ClockPlace { .. } => self.clock_key(k),
             }
             if self.closing.is_some() {
                 break;
@@ -659,6 +682,49 @@ impl App {
         let shade = if live { 0.42 } else { 0.62 };
         p.rect_filled(rect, radius, Color32::from_black_alpha((shade * alpha * 255.0) as u8));
         true
+    }
+
+    /// Placing the clock: the arrows move it (1 % of the screen a step), OK keeps, Back cancels.
+    fn clock_key(&mut self, k: &Nav) {
+        let Screen::ClockPlace { orig } = self.screen.clone() else { return };
+        let c = &mut self.cfg.clock;
+        match k {
+            Nav::Left => c.x = (c.x - 0.01).max(0.0),
+            Nav::Right => c.x = (c.x + 0.01).min(1.0),
+            Nav::Up => c.y = (c.y - 0.015).max(0.0),
+            Nav::Down => c.y = (c.y + 0.015).min(1.0),
+            Nav::Ok => {
+                self.persist();
+                self.screen = Screen::Settings { sel: item_index(Item::ClockPlace), confirm_reset: false };
+            }
+            Nav::Back | Nav::Erase | Nav::Source => {
+                self.cfg.clock = orig;
+                self.screen = Screen::Settings { sel: item_index(Item::ClockPlace), confirm_reset: false };
+            }
+            _ => {}
+        }
+    }
+
+    /// The whole screen: the interface faded where it really sits, the clock framed, and
+    /// a small bar of hints.
+    fn draw_clock_place(&mut self, ui: &Ui, p: &egui::Painter, st: &TvState, screen: Rect, alpha: f32) {
+        let s = self.cfg.scale;
+        let k = self.t;
+        self.draw_picker(ui, p, st, screen, Vec2::ZERO, alpha * 0.35);
+        self.hits.borrow_mut().clear();
+        let mut c = self.cfg.clock;
+        c.show = true;
+        let r = crate::clock::draw(p, screen, &c, &k, alpha);
+        p.rect_stroke(r.expand(10.0 * s), 10.0 * s, Stroke::new(2.0 * s, veil(k.accent, alpha)), StrokeKind::Outside);
+        let hints = [("◀ ▲ ▼ ▶", t("hint.move")), (t("key.ok"), t("hint.confirm")), (t("key.back"), t("hint.cancel"))];
+        // Wide enough for the help line and every hint, so nothing leaves the bar.
+        let help = p.layout_no_wrap(t("clock.place_help").to_string(), regular(17.0 * s), k.text_dim).size().x;
+        let w = (self.footer_width(p, &hints, 1.0) + 56.0 * s).max(help + 64.0 * s).max(520.0 * s);
+        let bar = Rect::from_center_size(pos2(screen.center().x, screen.min.y + 70.0 * s), vec2(w.min(screen.width() - 32.0 * s), 110.0 * s));
+        p.rect(bar, k.radius_lg * 2.0 * s, veil(k.card, 0.92 * alpha), Stroke::new(1.0, veil(k.card_border, alpha)), StrokeKind::Inside);
+        p.text(pos2(bar.center().x, bar.min.y + 28.0 * s), Align2::CENTER_CENTER, t("clock.place_help"), regular(17.0 * s), veil(k.text_dim, alpha));
+        self.footer(p, bar, &hints, alpha);
+        ui.ctx().request_repaint_after(std::time::Duration::from_millis(500));
     }
 
     /// Keys of the style and position pickers: arrows choose, OK keeps, Back cancels.
@@ -922,6 +988,10 @@ impl App {
                     let _ = self.backend.commands.send(Command::Takeover(on));
                 }
             }
+            Nav::Ok if all[sel] == Item::ClockPlace => {
+                self.screen = Screen::ClockPlace { orig: self.cfg.clock };
+                return;
+            }
             Nav::Ok if all[sel] == Item::Layout => {
                 let at = Layout::ALL.iter().position(|l| *l == self.cfg.layout).unwrap_or(0);
                 self.screen = Screen::StylePick { sel: at };
@@ -999,6 +1069,13 @@ impl App {
             Item::Size => c.scale = step(c.scale, 0.1, dir),
             Item::Opacity => c.panel_opacity = step(c.panel_opacity, 0.05, dir),
             Item::Dim => c.dim = step(c.dim, 0.05, dir),
+            Item::ShowPanel => c.show_panel = !c.show_panel,
+            Item::ClockShow => c.clock.show = !c.clock.show,
+            Item::ClockStyle => c.clock.style = cycle(&crate::config::ClockStyle::ALL, c.clock.style, dir),
+            Item::ClockSize => c.clock.size = step(c.clock.size, 0.1, dir),
+            Item::Clock24h => c.clock.hour24 = !c.clock.hour24,
+            Item::ClockSeconds => c.clock.seconds = !c.clock.seconds,
+            Item::ClockPlace => {}
             Item::ShowDisconnected => c.show_disconnected = !c.show_disconnected,
             Item::ShowDevices => c.show_device_names = !c.show_device_names,
             Item::ShowLiveTv => c.show_live_tv = !c.show_live_tv,
@@ -1176,6 +1253,13 @@ impl App {
             Screen::Options { id, sel } => self.draw_options(ui, &p, st, screen, offset, alpha, &id, sel),
             Screen::StylePick { sel } => self.draw_style_pick(ui, &p, screen, alpha, sel),
             Screen::PositionPick { sel } => self.draw_position_pick(ui, &p, screen, alpha, sel),
+            Screen::ClockPlace { .. } => self.draw_clock_place(ui, &p, st, screen, alpha),
+        }
+        // The clock, over everything but its own placing screen.
+        if self.cfg.clock.show && !matches!(self.screen, Screen::ClockPlace { .. }) {
+            crate::clock::draw(&p, screen, &self.cfg.clock, &self.t, alpha);
+            let every = if self.cfg.clock.seconds { 250 } else { 1000 };
+            ui.ctx().request_repaint_after(std::time::Duration::from_millis(every));
         }
     }
 
@@ -1210,6 +1294,11 @@ impl App {
 
     fn panel(&self, p: &egui::Painter, rect: Rect, alpha: f32) {
         self.add_hit(rect, Hit::Panel);
+        // Without the panel background only the tiles, title and hints show (the
+        // settings screens keep theirs, for legibility).
+        if !self.cfg.show_panel && self.screen == Screen::Picker {
+            return;
+        }
         let s = self.cfg.scale;
         let k = &self.t;
         let r = k.radius_lg * 2.0 * s;
@@ -1576,6 +1665,13 @@ impl App {
             Item::Size => ("type", t("settings.size"), format!("{:.0} %", c.scale * 100.0)),
             Item::Opacity => ("sun", t("settings.opacity"), format!("{:.0} %", c.panel_opacity * 100.0)),
             Item::Dim => ("moon", t("settings.dim"), format!("{:.0} %", c.dim * 100.0)),
+            Item::ShowPanel => ("layout-grid", t("settings.show_panel"), onoff(c.show_panel)),
+            Item::ClockShow => ("timer", t("settings.clock_show"), onoff(c.clock.show)),
+            Item::ClockStyle => ("timer", t("settings.clock_style"), c.clock.style.label().into()),
+            Item::ClockSize => ("type", t("settings.clock_size"), format!("{:.0} %", c.clock.size * 100.0)),
+            Item::Clock24h => ("timer", t("settings.clock_24h"), onoff(c.clock.hour24)),
+            Item::ClockSeconds => ("timer", t("settings.clock_seconds"), onoff(c.clock.seconds)),
+            Item::ClockPlace => ("maximize-2", t("settings.clock_place"), t("settings.clock_place_value").into()),
             Item::ShowDisconnected => ("cable", t("settings.show_disconnected"), onoff(c.show_disconnected)),
             Item::ShowDevices => ("tv", t("settings.show_devices"), onoff(c.show_device_names)),
             Item::ShowLiveTv => ("radio-tower", t("settings.show_live_tv"), onoff(c.show_live_tv)),
@@ -1739,6 +1835,7 @@ impl App {
                     // A gauge with its value, adjusted with Left/Right.
                     let v = match item {
                         Item::Size => self.cfg.scale,
+                        Item::ClockSize => self.cfg.clock.size,
                         Item::Opacity => self.cfg.panel_opacity,
                         _ => self.cfg.dim,
                     };

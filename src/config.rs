@@ -131,6 +131,69 @@ impl Corners {
     }
 }
 
+/// The look of the on-screen clock.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub enum ClockStyle {
+    /// Large digits with a soft shadow.
+    #[default]
+    Minimal,
+    /// The time in a pill of the theme's colours.
+    Pill,
+    /// The time over the day and date.
+    Stacked,
+    /// A dial with hands.
+    Analog,
+    /// Each digit on its own tile, as a flip clock.
+    Tiles,
+    /// LED seven-segment digits in the accent colour, unlit segments faint.
+    SevenSegment,
+    /// OnePlus-like: bold hours in the accent colour over white minutes.
+    OnePlus,
+}
+
+impl ClockStyle {
+    pub const ALL: [ClockStyle; 7] = [
+        ClockStyle::Minimal,
+        ClockStyle::Pill,
+        ClockStyle::Stacked,
+        ClockStyle::Analog,
+        ClockStyle::Tiles,
+        ClockStyle::SevenSegment,
+        ClockStyle::OnePlus,
+    ];
+    pub fn label(self) -> &'static str {
+        match self {
+            ClockStyle::Minimal => t("clock.minimal"),
+            ClockStyle::Pill => t("clock.pill"),
+            ClockStyle::Stacked => t("clock.stacked"),
+            ClockStyle::Analog => t("clock.analog"),
+            ClockStyle::Tiles => t("clock.tiles"),
+            ClockStyle::SevenSegment => t("clock.seven_segment"),
+            ClockStyle::OnePlus => t("clock.oneplus"),
+        }
+    }
+}
+
+/// The on-screen clock: where (centre, as fractions of the screen), how big, which format.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct ClockConfig {
+    pub show: bool,
+    pub style: ClockStyle,
+    pub x: f32,
+    pub y: f32,
+    pub size: f32,
+    pub hour24: bool,
+    pub seconds: bool,
+}
+
+impl Default for ClockConfig {
+    fn default() -> Self {
+        ClockConfig { show: false, style: ClockStyle::Minimal, x: 0.9, y: 0.09, size: 1.0, hour24: true, seconds: false }
+    }
+}
+
 /// Per-source overrides, keyed by `Source::id`.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Default)]
 #[serde(default, rename_all = "camelCase")]
@@ -159,6 +222,8 @@ pub struct Config {
     pub show_hints: bool,
     /// Size of everything, 0.7 .. 1.5.
     pub scale: f32,
+    /// The panel behind the tiles (off: only the tiles, title and hints).
+    pub show_panel: bool,
     /// Panel opacity, 0.4 .. 1.0 (the picture shows through below 1).
     pub panel_opacity: f32,
     /// How much the picture behind is darkened, 0 .. 0.8.
@@ -193,6 +258,7 @@ pub struct Config {
     /// Source order by id; sources not listed follow in the TV's order.
     pub order: Vec<String>,
     pub sources: Vec<SourceOverride>,
+    pub clock: ClockConfig,
 }
 
 impl Default for Config {
@@ -208,6 +274,7 @@ impl Default for Config {
             show_header: true,
             show_hints: true,
             scale: 1.0,
+            show_panel: true,
             panel_opacity: 0.92,
             dim: 0.35,
             naming: Naming::Device,
@@ -226,6 +293,7 @@ impl Default for Config {
             multikey_opens: false,
             order: Vec::new(),
             sources: Vec::new(),
+            clock: ClockConfig::default(),
         }
     }
 }
@@ -303,6 +371,9 @@ impl Config {
         self.dim = self.dim.clamp(0.0, 0.8);
         self.auto_close_secs = self.auto_close_secs.min(120);
         self.auto_switch_secs = self.auto_switch_secs.min(10);
+        self.clock.x = self.clock.x.clamp(0.0, 1.0);
+        self.clock.y = self.clock.y.clamp(0.0, 1.0);
+        self.clock.size = self.clock.size.clamp(0.4, 3.0);
     }
 
     pub fn source(&self, id: &str) -> Option<&SourceOverride> {

@@ -15,7 +15,7 @@ default = ["desktop"]
 # Desktop preview window with mock inputs (for designing the UI on a PC).
 desktop = ["dep:eframe", "dep:png"]
 # The real TV build: SDL-webOS + GLES2 + luna-service2.
-webos = ["dep:sdl2", "dep:libc", "dep:glow", "dep:egui_glow"]
+webos = ["dep:sdl2", "dep:glow", "dep:egui_glow"]
 
 [dependencies]
 # No default fonts: the UI ships a subset of Inter (tools/subset-fonts.sh).
@@ -24,7 +24,7 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 eframe = { version = "0.37", optional = true, default-features = false, features = ["glow", "wayland", "x11", "default_fonts"] }
 sdl2 = { version = "0.38", optional = true, features = ["use-pkgconfig"] }
-libc = { version = "0.2", optional = true }
+libc = "0.2"
 png = { version = "0.18", optional = true }
 glow = { version = "0.17", optional = true }
 egui_glow = { version = "0.37", optional = true, default-features = false }
