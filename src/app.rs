@@ -1046,12 +1046,34 @@ impl App {
         }
     }
 
-    fn footer(&self, p: &egui::Painter, rect: Rect, hints: &[(&str, &str)], alpha: f32) {
-        let s = self.cfg.scale;
-        let k = &self.t;
-        let y = rect.max.y - 26.0 * s - 16.0 * s;
-        let mut x = rect.min.x + 28.0 * s;
+    /// Width the key hints take at `zoom` (1 = normal size), from the left padding on.
+    fn footer_width(&self, p: &egui::Painter, hints: &[(&str, &str)], zoom: f32) -> f32 {
+        let s = self.cfg.scale * zoom;
+        let mut w = 0.0;
         for (key, label) in hints {
+            w += text_width(p, key, semibold(14.0 * s)).max(18.0 * s) + 16.0 * s;
+            w += 10.0 * s + text_width(p, label, regular(17.0 * s)) + 26.0 * s;
+        }
+        w - 26.0 * s
+    }
+
+    /// The key hints along the panel's bottom. They always stay inside it: when they do not
+    /// fit, the arrow hints (the obvious ones) go first, then the text gets a little smaller.
+    fn footer(&self, p: &egui::Painter, rect: Rect, hints: &[(&str, &str)], alpha: f32) {
+        let k = &self.t;
+        let room = rect.width() - 2.0 * 28.0 * self.cfg.scale;
+        let mut hints: Vec<(&str, &str)> = hints.to_vec();
+        while self.footer_width(p, &hints, 1.0) > room {
+            let Some(i) = hints.iter().position(|(key, _)| key.contains('◀') || key.contains('▲')) else { break };
+            hints.remove(i);
+        }
+        let width = self.footer_width(p, &hints, 1.0);
+        let zoom = if width > room { (room / width).max(0.7) } else { 1.0 };
+        let s = self.cfg.scale * zoom;
+        let y = rect.max.y - 26.0 * self.cfg.scale - 16.0 * self.cfg.scale + (1.0 - zoom) * 15.0 * self.cfg.scale;
+        let mut x = rect.min.x + 28.0 * self.cfg.scale;
+        let clip = p.with_clip_rect(rect.shrink(4.0));
+        for (key, label) in &hints {
             let kf = semibold(14.0 * s);
             let kw = text_width(p, key, kf.clone()).max(18.0 * s) + 16.0 * s;
             let cap = Rect::from_min_size(pos2(x, y), vec2(kw, 30.0 * s));
@@ -1064,10 +1086,10 @@ impl App {
             } else {
                 None
             };
-            p.rect(cap, 7.0 * s, veil(k.field, alpha), Stroke::new(1.0, veil(k.field_border, alpha)), StrokeKind::Inside);
-            p.text(cap.center(), Align2::CENTER_CENTER, *key, kf, veil(k.text, alpha));
+            clip.rect(cap, 7.0 * s, veil(k.field, alpha), Stroke::new(1.0, veil(k.field_border, alpha)), StrokeKind::Inside);
+            clip.text(cap.center(), Align2::CENTER_CENTER, *key, kf, veil(k.text, alpha));
             x = cap.max.x + 10.0 * s;
-            let r = p.text(pos2(x, cap.center().y), Align2::LEFT_CENTER, *label, regular(17.0 * s), veil(k.text_dim, alpha));
+            let r = clip.text(pos2(x, cap.center().y), Align2::LEFT_CENTER, *label, regular(17.0 * s), veil(k.text_dim, alpha));
             if let Some(nav) = nav {
                 self.add_hit(cap.union(r).expand(6.0 * s), Hit::Key(nav));
             }
@@ -1110,7 +1132,15 @@ impl App {
             cols as f32 * tile.x + cols.saturating_sub(1) as f32 * gap,
             rows as f32 * tile.y + rows.saturating_sub(1) as f32 * gap,
         );
-        let min_w = if self.cfg.layout == Layout::Sidebar { 0.0 } else { 640.0 * s };
+        // The panel is at least as wide as its key hints (the Sidebar keeps its width and
+        // compacts them instead).
+        let hint_w = if self.cfg.show_hints {
+            let probe = [(t("key.ok"), t("hint.switch")), ("▲ ▼", t("hint.move")), ("▶", t("hint.cec_options")), (t("key.back"), t("hint.close"))];
+            self.footer_width(p, &probe, 1.0) + 2.0 * pad
+        } else {
+            0.0
+        };
+        let min_w = if self.cfg.layout == Layout::Sidebar { 0.0 } else { (640.0 * s).max(hint_w) };
         let want = vec2((content.x + pad * 2.0).max(min_w), head + content.y + foot + 8.0 * s);
         let rect = self.panel_rect(screen, want).translate(offset);
         self.panel(p, rect, alpha);
