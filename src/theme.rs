@@ -410,9 +410,9 @@ pub fn semibold(size: f32) -> FontId {
 pub fn install_fonts(ctx: &egui::Context) {
     let mut defs = FontDefinitions::default();
     let fonts: [(&str, &'static [u8]); 3] = [
-        ("Inter-Regular", include_bytes!("../assets/fonts/Inter-Regular.ttf")),
-        ("Inter-Medium", include_bytes!("../assets/fonts/Inter-Medium.ttf")),
-        ("Inter-SemiBold", include_bytes!("../assets/fonts/Inter-SemiBold.ttf")),
+        ("Inter-Regular", include_bytes!("../assets/fonts/Inter-Regular.subset.ttf")),
+        ("Inter-Medium", include_bytes!("../assets/fonts/Inter-Medium.subset.ttf")),
+        ("Inter-SemiBold", include_bytes!("../assets/fonts/Inter-SemiBold.subset.ttf")),
     ];
     for (name, bytes) in fonts {
         defs.font_data.insert(name.into(), Arc::new(FontData::from_static(bytes)));

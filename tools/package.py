@@ -22,7 +22,7 @@ APPINFO = {
     "main": "source-picker",
     "title": "Inputs",
     "icon": "icon.png",
-    "largeIcon": "icon.png",
+    "largeIcon": "largeIcon.png",
     "iconColor": "#1A1A1C",
     "defaultWindowType": "overlay",
     "transparent": True,
@@ -95,7 +95,9 @@ def main():
     base = f"usr/palm/applications/{APP_ID}/"
     data_entries = [
         (base + "appinfo.json", json.dumps(APPINFO, indent=2).encode(), 0o644),
-        (base + "icon.png", png(80), 0o644),
+        # Icon 2 of assets/app-icons (HDMI port flowing into a screen).
+        (base + "icon.png", (ROOT / "assets/app-icons/app-icon-80.png").read_bytes(), 0o644),
+        (base + "largeIcon.png", (ROOT / "assets/app-icons/app-icon-130.png").read_bytes(), 0o644),
         (base + "source-picker", BIN.read_bytes(), 0o755),
         (base + "lib/libSDL2-2.0.so.0", SDL.read_bytes(), 0o755),
     ]

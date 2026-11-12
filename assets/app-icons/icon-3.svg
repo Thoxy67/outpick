@@ -1,0 +1,25 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <!-- Inlet #3: three streams converging through an opening into a rounded basin -->
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#1F1F22"/>
+      <stop offset="1" stop-color="#141415"/>
+    </linearGradient>
+    <linearGradient id="flow" gradientUnits="userSpaceOnUse" x1="64" y1="0" x2="320" y2="0">
+      <stop offset="0" stop-color="#8B7CF6" stop-opacity="0.25"/>
+      <stop offset="1" stop-color="#8B7CF6"/>
+    </linearGradient>
+  </defs>
+  <rect width="512" height="512" rx="112" fill="url(#bg)"/>
+  <rect x="3" y="3" width="506" height="506" rx="109" fill="none" stroke="#28282C" stroke-width="6"/>
+  <!-- basin, open on its left side -->
+  <path d="M280 222V212A40 40 0 0 1 320 172H408A40 40 0 0 1 448 212V300A40 40 0 0 1 408 340H320A40 40 0 0 1 280 300V290"
+        fill="none" stroke="#ECECF0" stroke-width="22" stroke-linecap="round" stroke-linejoin="round"/>
+  <g fill="none" stroke="url(#flow)" stroke-width="22" stroke-linecap="round">
+    <path d="M64 120C184 120 196 256 316 256"/>
+    <path d="M64 392C184 392 196 256 316 256"/>
+    <path d="M64 256H316"/>
+  </g>
+  <circle cx="364" cy="256" r="34" fill="#8B7CF6"/>
+  <circle cx="364" cy="256" r="12" fill="#D6D0FF"/>
+</svg>

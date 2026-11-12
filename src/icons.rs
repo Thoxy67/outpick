@@ -1,46 +1,47 @@
-//! Lucide icons (ISC), recoloured to white so `Image::tint` gives any colour,
-//! as Photocraft's `icons.rs` does with its SVG set.
+//! Lucide icons (ISC). `build.rs` rasterizes every `assets/icons/*.svg` into a
+//! 128 px alpha mask at build time, so no SVG renderer ships in the binary;
+//! here the masks become white textures that `paint` tints, as Photocraft's
+//! `icons.rs` tints its recoloured SVGs.
 
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use std::sync::OnceLock;
 
-macro_rules! icons {
-    ($($name:literal),* $(,)?) => {
-        const ICONS: &[(&str, &str)] = &[$(($name, include_str!(concat!("../assets/icons/", $name, ".svg")))),*];
-    };
-}
+include!(concat!(env!("OUT_DIR"), "/icons.rs"));
 
-icons!(
-    "tv", "monitor", "gamepad-2", "speaker", "cast", "usb", "box", "radio-tower", "film", "laptop",
-    "house", "cable", "settings", "check", "chevron-left", "chevron-right", "eye", "eye-off",
-    "palette", "layout-grid", "list", "rows-3", "arrow-up", "arrow-down", "rotate-ccw", "sun",
-    "moon", "type", "maximize-2", "timer", "circle-check", "pencil", "server", "hard-drive", "power", "info", "menu",
-);
+static TEXTURES: OnceLock<HashMap<&'static str, egui::TextureHandle>> = OnceLock::new();
 
-/// Registers every icon with egui's loaders (`bytes://icon/<name>.svg`).
-pub fn install(ctx: &egui::Context) {
-    egui_extras::install_image_loaders(ctx);
-    for (name, svg) in ICONS {
-        let white = svg.replace("currentColor", "#ffffff");
-        ctx.include_bytes(format!("bytes://icon/{name}.svg"), white.into_bytes());
+fn unrle(data: &[u8]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(ICON_PX * ICON_PX);
+    for pair in data.chunks_exact(2) {
+        out.extend(std::iter::repeat_n(pair[1], pair[0] as usize));
     }
+    out.resize(ICON_PX * ICON_PX, 0);
+    out
 }
 
-pub fn uri(name: &str) -> String {
-    format!("bytes://icon/{name}.svg")
+/// Uploads every icon once (white, alpha from the mask, mipmapped so small
+/// sizes stay smooth).
+pub fn install(ctx: &egui::Context) {
+    TEXTURES.get_or_init(|| {
+        let options = egui::TextureOptions { mipmap_mode: Some(egui::TextureFilter::Linear), ..egui::TextureOptions::LINEAR };
+        ICONS
+            .iter()
+            .map(|(name, rle)| {
+                let pixels = unrle(rle).into_iter().map(egui::Color32::from_white_alpha).collect();
+                let image = egui::ColorImage { size: [ICON_PX, ICON_PX], source_size: egui::vec2(ICON_PX as f32, ICON_PX as f32), pixels };
+                (*name, ctx.load_texture(format!("icon-{name}"), image, options))
+            })
+            .collect()
+    });
 }
 
 /// Paints icon `name` into `rect`, tinted, through `p` (so it obeys the
-/// painter's clip rect, unlike `Image::paint_at`).
+/// painter's clip rect).
 pub fn paint(p: &egui::Painter, name: &str, rect: egui::Rect, tint: egui::Color32) {
-    let ctx = p.ctx();
-    let image = egui::Image::from_uri(uri(name)).fit_to_exact_size(rect.size());
-    match image.load_for_size(ctx, rect.size()) {
-        Ok(egui::load::TexturePoll::Ready { texture }) => {
-            let uv = egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0));
-            p.image(texture.id, rect, uv, tint);
-        }
-        Ok(egui::load::TexturePoll::Pending { .. }) => ctx.request_repaint(),
-        Err(_) => {}
+    if let Some(tex) = TEXTURES.get().and_then(|t| t.get(name)) {
+        let uv = egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0));
+        p.image(tex.id(), rect, uv, tint);
     }
 }
 

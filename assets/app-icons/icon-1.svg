@@ -1,0 +1,36 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <!-- Inlet #1: input tile grid, one tile selected by the violet ring -->
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#1F1F22"/>
+      <stop offset="1" stop-color="#141415"/>
+    </linearGradient>
+  </defs>
+  <rect width="512" height="512" rx="112" fill="url(#bg)"/>
+  <rect x="3" y="3" width="506" height="506" rx="109" fill="none" stroke="#28282C" stroke-width="6"/>
+  <g fill="#232326" stroke="#2E2E33" stroke-width="4">
+    <rect x="278" y="102" width="132" height="132" rx="30"/>
+    <rect x="102" y="278" width="132" height="132" rx="30"/>
+    <rect x="278" y="278" width="132" height="132" rx="30"/>
+  </g>
+  <!-- dim glyphs (Lucide tv / house / server), 24-grid scaled 2.6x -->
+  <g fill="none" stroke="#96969E" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" opacity="0.7">
+    <g transform="translate(312.8 136.8) scale(2.6)">
+      <rect width="20" height="15" x="2" y="7" rx="2"/><path d="M17 2l-5 5-5-5"/>
+    </g>
+    <g transform="translate(136.8 312.8) scale(2.6)">
+      <path d="M15 21v-8a1 1 0 0 0-1-1h-4a1 1 0 0 0-1 1v8"/>
+      <path d="M3 10a2 2 0 0 1 .709-1.528l7-5.999a2 2 0 0 1 2.582 0l7 5.999A2 2 0 0 1 21 10v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>
+    </g>
+    <g transform="translate(312.8 312.8) scale(2.6)">
+      <rect width="20" height="8" x="2" y="2" rx="2"/><rect width="20" height="8" x="2" y="14" rx="2"/>
+      <path d="M6 6h.01M6 18h.01"/>
+    </g>
+  </g>
+  <!-- selected tile -->
+  <rect x="102" y="102" width="132" height="132" rx="30" fill="#8B7CF6" fill-opacity="0.22"/>
+  <rect x="90" y="90" width="156" height="156" rx="42" fill="none" stroke="#8B7CF6" stroke-width="12"/>
+  <g transform="translate(132 132) scale(3)" fill="none" stroke="#D6D0FF" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4"/><path d="M10 17l5-5-5-5"/><path d="M15 12H3"/>
+  </g>
+</svg>
