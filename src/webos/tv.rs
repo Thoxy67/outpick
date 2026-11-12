@@ -39,15 +39,21 @@ static PREVIEW_RETRY: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicB
 fn preview_loop(state: Shared, fps: Arc<AtomicU32>, repaint: impl Fn()) {
     let dir = super::takeover::DIR;
     let path_of = |id: &str| format!("{dir}/preview-{id}.bmp");
-    // Last pictures from earlier sessions.
+    // Last pictures from earlier sessions: every preview-<id>.bmp in the folder
+    // (read straight away, not after the inputs are listed, which comes later).
     {
-        let ids: Vec<String> = state.lock().unwrap().sources.iter().map(|s| s.id.clone()).chain([String::from("LIVE_TV")]).collect();
-        let mut st = state.lock().unwrap();
-        for id in ids {
-            if let Some((width, height, rgba)) = std::fs::read(path_of(&id)).ok().and_then(|b| decode_bmp(&b)) {
-                st.previews.insert(id, Preview { width, height, rgba: Arc::new(rgba), seq: 1, live: false });
-            }
-        }
+        let stored: Vec<(String, Preview)> = std::fs::read_dir(dir)
+            .into_iter()
+            .flatten()
+            .flatten()
+            .filter_map(|e| {
+                let name = e.file_name().to_string_lossy().to_string();
+                let id = name.strip_prefix("preview-")?.strip_suffix(".bmp")?.to_string();
+                let (width, height, rgba) = decode_bmp(&std::fs::read(e.path()).ok()?)?;
+                Some((id, Preview { width, height, rgba: Arc::new(rgba), seq: 1, live: false }))
+            })
+            .collect();
+        state.lock().unwrap().previews.extend(stored);
     }
     repaint();
     let mut seq = 1u64;
@@ -129,8 +135,10 @@ fn detect_home() -> Source {
         .map(|m| m.lines().any(|l| l.contains("/usr/bin/com.webos.app.home") && !l.starts_with("none")))
         .unwrap_or(false)
         || std::fs::read_to_string("/proc/self/mountinfo")
-            .map(|m| m.lines().any(|l| l.contains("com.ecklf.luma") && l.contains("com.webos.app.home")))
-            .unwrap_or(false);
+            .map(|m| m.lines().any(|l| (l.contains("com.ecklf.luma") || l.contains("luma-home")) && l.contains("com.webos.app.home")))
+            .unwrap_or(false)
+        // webOS 25: Luma's manifest method mounts its staged app over LG's Home app.
+        || std::path::Path::new("/var/lib/luma-home/app").exists() && std::fs::read_to_string("/proc/mounts").map(|m| m.contains("/usr/palm/applications/com.webos.app.home")).unwrap_or(false);
     if luma_marker || luma_mount {
         return Source::home("Luma");
     }

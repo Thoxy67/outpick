@@ -138,6 +138,7 @@ enum Item {
     AutoClose,
     AutoSwitch,
     SourceKey,
+    MultikeyOpens,
     RestoreLg,
     Sources,
     Reset,
@@ -150,7 +151,7 @@ const SECTIONS: &[(&str, &[Item])] = &[
     ("section.layout", &[Item::Layout, Item::Position, Item::ShowIcons, Item::ShowHeader, Item::ShowHints]),
     ("section.content", &[Item::Naming, Item::ShowPreviews, Item::PreviewFps, Item::CaptureAccess, Item::ShowHome, Item::ShowDisconnected, Item::ShowDevices, Item::ShowLiveTv, Item::ShowUsb, Item::ShowMediaServers]),
     ("section.behaviour", &[Item::AutoClose, Item::AutoSwitch]),
-    ("section.remote", &[Item::SourceKey, Item::RestoreLg]),
+    ("section.remote", &[Item::SourceKey, Item::MultikeyOpens, Item::RestoreLg]),
     ("section.sources", &[Item::Sources, Item::Reset]),
 ];
 
@@ -170,6 +171,7 @@ fn row_kind_of(item: Item, cfg: &Config) -> RowKind {
         Item::ShowHints => RowKind::Toggle(cfg.show_hints),
         Item::ShowHome => RowKind::Toggle(cfg.show_home),
         Item::ShowPreviews => RowKind::Toggle(cfg.show_previews),
+        Item::MultikeyOpens => RowKind::Toggle(cfg.multikey_opens),
         Item::ShowDisconnected => RowKind::Toggle(cfg.show_disconnected),
         Item::ShowDevices => RowKind::Toggle(cfg.show_device_names),
         Item::ShowLiveTv => RowKind::Toggle(cfg.show_live_tv),
@@ -734,6 +736,16 @@ impl App {
                 self.adjust(all[sel], if *k == Nav::Left { -1 } else { 1 });
                 self.retheme(ctx);
             }
+            Nav::Ok | Nav::Left | Nav::Right if all[sel] == Item::MultikeyOpens => {
+                self.adjust(Item::MultikeyOpens, 1);
+                // The root helper reads the keys from the saved config.
+                self.persist();
+                let st = self.backend.state.lock().map(|s| s.clone()).unwrap_or_default();
+                let on = self.cfg.multikey_opens || matches!(st.key_owner, KeyOwner::Picker);
+                if !matches!(st.key_owner, KeyOwner::Unsupported) {
+                    let _ = self.backend.commands.send(Command::Takeover(on));
+                }
+            }
             Nav::Ok if all[sel] == Item::CaptureAccess => {
                 let st = self.backend.state.lock().map(|s| s.clone()).unwrap_or_default();
                 if self.button_caption(Item::CaptureAccess, false, &st).1 {
@@ -812,6 +824,7 @@ impl App {
             Item::ShowMediaServers => c.show_media_servers = !c.show_media_servers,
             Item::AutoClose => c.auto_close_secs = cycle(&[0, 5, 10, 15, 30, 60], c.auto_close_secs, dir),
             Item::AutoSwitch => c.auto_switch_secs = cycle(&[0, 1, 2, 3, 5], c.auto_switch_secs, dir),
+            Item::MultikeyOpens => c.multikey_opens = !c.multikey_opens,
             Item::Sources | Item::Reset | Item::SourceKey | Item::RestoreLg | Item::CaptureAccess => {}
         }
     }
@@ -1362,6 +1375,7 @@ impl App {
             Item::ShowMediaServers => ("server", t("settings.show_media_servers"), onoff(c.show_media_servers)),
             Item::AutoClose => ("timer", t("settings.auto_close"), secs(c.auto_close_secs, "value.never")),
             Item::AutoSwitch => ("circle-check", t("settings.auto_switch"), secs(c.auto_switch_secs, "value.ok_only")),
+            Item::MultikeyOpens => ("menu", t("settings.multikey_opens"), onoff(c.multikey_opens)),
             Item::SourceKey => (
                 "tv",
                 t("settings.source_key"),

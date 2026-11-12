@@ -185,6 +185,9 @@ pub struct Config {
     /// Switch to the highlighted source this many seconds after the last key,
     /// as LG's picker does when Source is pressed repeatedly (0 = only on OK).
     pub auto_switch_secs: u32,
+    /// The remote's Multikey (accessibility) button opens the picker too, for
+    /// remotes with no Source button (with the Source key takeover on).
+    pub multikey_opens: bool,
     /// Animations (selection glide, fade).
     pub animations: bool,
     /// Source order by id; sources not listed follow in the TV's order.
@@ -220,6 +223,7 @@ impl Default for Config {
             auto_close_secs: 15,
             auto_switch_secs: 0,
             animations: true,
+            multikey_opens: false,
             order: Vec::new(),
             sources: Vec::new(),
         }

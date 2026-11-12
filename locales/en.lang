@@ -79,6 +79,7 @@ icon.drive = Disk
 # Customize
 section.remote = Remote
 settings.source_key = Source key opens
+settings.multikey_opens = Multikey (···) button opens it
 settings.restore_lg = Give the Source key back to LG
 remote.this_picker = This picker
 remote.lg = LG's picker

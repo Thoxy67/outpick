@@ -55,11 +55,25 @@ fn filter_path() -> String {
 }
 
 fn filter_source() -> String {
+    // Keys that open the picker: Source always, Multikey if chosen in Customize
+    // (remotes without a Source button). Read here, as root, from the shared config.
+    let multikey = crate::config::Config::load().multikey_opens;
     format!(
-        r#"/* Written by lg-c1-source ({APP_ID}): the remote's Source key opens it.
+        r#"/* Written by lg-c1-source ({APP_ID}): the remote's Source key opens it
+ * (and, if chosen, a short press on Multikey; a long one stays LG's accessibility).
  * First in {CHAIN}; every other key goes on to LG's filters.
  * Undo: Customize > Source key, or `source-picker --takeover off` as root. */
 var lgSourcePickerId = "{APP_ID}";
+var lgSourcePickerMultikey = {multikey};
+var lgSourcePickerSourceKeys = (function () {{
+    var keys = [];
+    try {{ keys.push(WebOS.Key_webOS_InputSource); }} catch (e) {{}}
+    try {{ keys.push(WebOS.Key_webOS_LocalInputSource); }} catch (e) {{}}
+    return keys;
+}})();
+var lgSourcePickerMultiDown = false;
+var lgSourcePickerMultiLong = false;
+var lgSourcePickerPress = 0;
 
 function lgSourcePickerInFront() {{
     try {{
@@ -76,27 +90,66 @@ function lgSourcePickerFallback() {{
         JSON.stringify({{ "appId": "com.webos.app.quickinputpicker" }}), function () {{}});
 }}
 
+// Opens the picker, or, when it is already open, moves it to the next input
+// (sent as Tab, which the picker reads as the Source key).
+function lgSourcePickerOpen() {{
+    if (lgSourcePickerInFront()) {{
+        global.sendKeyToFocusWindow(Qt.Key_Tab, true, 15);
+        global.sendKeyToFocusWindow(Qt.Key_Tab, false, 15);
+        return;
+    }}
+    lunaCall.send("com.webos.applicationManager", "/launch",
+        JSON.stringify({{ "id": lgSourcePickerId }}), function (payload) {{
+            try {{
+                var r = typeof payload === "string" ? JSON.parse(payload) : payload;
+                if (!r || r.returnValue === false) lgSourcePickerFallback();
+            }} catch (e) {{
+                lgSourcePickerFallback();
+            }}
+        }});
+}}
+
+// What LG's long Multikey press opens (appLaunch.js launchAccessibilityOverlay).
+function lgSourcePickerAccessibility() {{
+    try {{
+        if (typeof configdService !== "undefined" && configdService.supportNMRM)
+            applicationManager.launch("com.palm.app.settings", JSON.stringify({{ "target": "accessibility", "item": "audioGuidance" }}));
+        else
+            applicationManager.launch("com.webos.app.accessibility-overlay", JSON.stringify({{ "quickMode": true }}));
+    }} catch (e) {{
+        applicationManager.launch("com.webos.app.accessibility", "{{}}");
+    }}
+}}
+
 function {HANDLER}(key, pressed, autoRepeat) {{
     try {{
-        if (key !== WebOS.Key_webOS_InputSource && key !== WebOS.Key_webOS_LocalInputSource)
-            return KeyPolicy.NextPolicy;
-        if (lgSourcePickerInFront()) {{
-            // Already open: a further press moves to the next input, as LG's does
-            // (sent as Tab, which the picker reads as the Source key).
-            if (!autoRepeat) global.sendKeyToFocusWindow(Qt.Key_Tab, pressed, 15);
+        if (lgSourcePickerSourceKeys.indexOf(key) >= 0) {{
+            if (pressed && !autoRepeat) lgSourcePickerOpen();
             return KeyPolicy.Accepted;
         }}
-        if (pressed && !autoRepeat) {{
-            lunaCall.send("com.webos.applicationManager", "/launch",
-                JSON.stringify({{ "id": lgSourcePickerId }}), function (payload) {{
-                    try {{
-                        var r = typeof payload === "string" ? JSON.parse(payload) : payload;
-                        if (!r || r.returnValue === false) lgSourcePickerFallback();
-                    }} catch (e) {{
-                        lgSourcePickerFallback();
-                    }}
-                }});
+        var multi = -1;
+        try {{ multi = WebOS.Key_webOS_Multikey; }} catch (e) {{}}
+        if (!lgSourcePickerMultikey || key !== multi)
+            return KeyPolicy.NextPolicy;
+        // Multikey: short press = the picker, held 2 s = LG's accessibility.
+        if (pressed) {{
+            if (!autoRepeat) {{
+                lgSourcePickerMultiDown = true;
+                lgSourcePickerMultiLong = false;
+                var press = ++lgSourcePickerPress;
+                try {{
+                    genericTimer.set(2000, function () {{
+                        if (lgSourcePickerMultiDown && press === lgSourcePickerPress) {{
+                            lgSourcePickerMultiLong = true;
+                            lgSourcePickerAccessibility();
+                        }}
+                    }});
+                }} catch (e) {{}}
+            }}
+            return KeyPolicy.Accepted;
         }}
+        lgSourcePickerMultiDown = false;
+        if (!lgSourcePickerMultiLong) lgSourcePickerOpen();
         return KeyPolicy.Accepted;
     }} catch (e) {{
         console.warn("lg-c1-source keyfilter: " + e);

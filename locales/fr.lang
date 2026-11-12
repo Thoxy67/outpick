@@ -79,6 +79,7 @@ icon.drive = Disque
 # Personnaliser
 section.remote = Télécommande
 settings.source_key = La touche Source ouvre
+settings.multikey_opens = La touche Multikey (···) l'ouvre
 settings.restore_lg = Rendre la touche Source à LG
 remote.this_picker = Ce sélecteur
 remote.lg = Le sélecteur LG
