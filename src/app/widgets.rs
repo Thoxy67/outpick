@@ -4,7 +4,7 @@ use super::{App, Hit, HintKey, Screen};
 use crate::config::{Config, Layout, Position};
 use crate::i18n::t;
 use crate::theme::{Tokens, regular, semibold, veil};
-use egui::{Align2, Color32, CornerRadius, Mesh, Rect, Shadow, Stroke, StrokeKind, Ui, Vec2, pos2, vec2};
+use egui::{Align2, Color32, CornerRadius, Mesh, Pos2, Rect, Shadow, Stroke, StrokeKind, Ui, Vec2, pos2, vec2};
 
 impl App {
     pub(super) fn panel_rect(&self, screen: Rect, size: Vec2) -> Rect {
@@ -47,6 +47,22 @@ impl App {
         p.rect(rect, r, fill, Stroke::new(1.0 * s, veil(k.card_border, alpha)), StrokeKind::Inside);
     }
 
+    /// The picker drawn without its panel: its texts sit on the picture, as the clock's do.
+    fn bare(&self) -> bool {
+        !self.cfg.show_panel && self.screen == Screen::Picker
+    }
+
+    /// Text on the panel, or shadowed white on the picture when there is no panel.
+    #[allow(clippy::too_many_arguments)]
+    fn label(&self, p: &egui::Painter, at: Pos2, anchor: Align2, text: &str, font: egui::FontId, color: Color32, dim: bool, alpha: f32) -> Rect {
+        if self.bare() {
+            let white = if dim { Color32::from_white_alpha(210) } else { Color32::WHITE };
+            crate::clock::shadowed(p, at, anchor, text, font, white, alpha)
+        } else {
+            p.text(at, anchor, text, font, veil(color, alpha))
+        }
+    }
+
     pub(super) fn header(&self, p: &egui::Painter, rect: Rect, title: &str, subtitle: &str, alpha: f32) {
         let s = self.cfg.scale;
         let k = &self.t;
@@ -54,11 +70,11 @@ impl App {
         // Title and subtitle share one centre line.
         let yc = rect.min.y + pad + 19.0 * s;
         let tw = text_width(p, title, semibold(30.0 * s));
-        p.text(pos2(rect.min.x + pad, yc), Align2::LEFT_CENTER, title, semibold(30.0 * s), veil(k.text, alpha));
+        self.label(p, pos2(rect.min.x + pad, yc), Align2::LEFT_CENTER, title, semibold(30.0 * s), k.text, false, alpha);
         if !subtitle.is_empty() {
             let room = rect.width() - pad * 2.0 - tw - 24.0 * s;
             let sub = fit(p, subtitle, regular(18.0 * s), room);
-            p.text(pos2(rect.max.x - pad, yc), Align2::RIGHT_CENTER, sub, regular(18.0 * s), veil(k.text_dim, alpha));
+            self.label(p, pos2(rect.max.x - pad, yc), Align2::RIGHT_CENTER, &sub, regular(18.0 * s), k.text_dim, true, alpha);
         }
     }
 
@@ -102,10 +118,12 @@ impl App {
             } else {
                 None
             };
-            clip.rect(cap, 7.0 * s, veil(k.field, alpha), Stroke::new(1.0, veil(k.field_border, alpha)), StrokeKind::Inside);
+            // Without the panel the key caps are solid, so they read over any picture.
+            let cap_fill = if self.bare() { k.card } else { k.field };
+            clip.rect(cap, 7.0 * s, veil(cap_fill, alpha), Stroke::new(1.0, veil(k.field_border, alpha)), StrokeKind::Inside);
             clip.text(cap.center(), Align2::CENTER_CENTER, *key, kf, veil(k.text, alpha));
             x = cap.max.x + 10.0 * s;
-            let r = clip.text(pos2(x, cap.center().y), Align2::LEFT_CENTER, *label, regular(17.0 * s), veil(k.text_dim, alpha));
+            let r = self.label(&clip, pos2(x, cap.center().y), Align2::LEFT_CENTER, label, regular(17.0 * s), k.text_dim, true, alpha);
             if let Some(nav) = nav {
                 self.add_hit(cap.union(r).expand(6.0 * s), Hit::Key(nav));
             }
