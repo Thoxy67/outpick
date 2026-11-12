@@ -154,6 +154,7 @@ impl App {
     }
 
     /// Called when the app is shown again (a relaunch while it stays alive).
+    #[cfg_attr(feature = "webos", allow(dead_code))] // F5 in the desktop preview
     pub fn reopen(&mut self) {
         self.snap = true;
         self.screen = Screen::Picker;
@@ -165,6 +166,7 @@ impl App {
     }
 
     /// Called on every way out (closed, quit, window closed): saves the settings.
+    #[cfg_attr(not(feature = "webos"), allow(dead_code))]
     pub fn shutdown(&mut self) {
         self.persist();
     }

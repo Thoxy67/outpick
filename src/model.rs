@@ -6,6 +6,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex, mpsc};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(not(feature = "webos"), allow(dead_code))] // used by the TV backend (and tests)
 pub enum SourceKind {
     Hdmi,
     LiveTv,
@@ -114,6 +115,7 @@ impl Source {
 
 /// What an HDMI input says about the device behind it, from `eim/getAllInputStatus`.
 #[derive(Default, Clone, Debug)]
+#[cfg_attr(not(feature = "webos"), allow(dead_code))] // used by the TV backend (and tests)
 pub struct DeviceHints {
     /// HDMI-CEC: the device's OSD name, vendor id (IEEE OUI) and device type
     /// (0 TV, 1 recorder, 3 tuner/set-top box, 4 playback, 5 audio system).
@@ -134,6 +136,7 @@ pub struct DeviceHints {
 /// The icon of an HDMI input's device. HDMI-CEC first (the device's own name, maker
 /// and device type); then the HDMI info frame and LG's settings, for devices without
 /// CEC (most PCs) or with an anonymous CEC name.
+#[cfg_attr(not(feature = "webos"), allow(dead_code))] // used by the TV backend (and tests)
 pub fn detect_icon(h: &DeviceHints, kind: SourceKind) -> SourceIcon {
     let words = |s: &str| -> Vec<String> { s.to_ascii_lowercase().split(|c: char| !c.is_ascii_alphanumeric()).filter(|w| !w.is_empty()).map(str::to_string).collect() };
     let low = |s: &str| s.to_ascii_lowercase();
@@ -231,6 +234,7 @@ pub fn icon_from_tv(name: &str, kind: SourceKind) -> SourceIcon {
 
 /// Who answers the remote's Source key.
 #[derive(Clone, Debug, PartialEq, Default)]
+#[cfg_attr(not(feature = "webos"), allow(dead_code))] // used by the TV backend (and tests)
 pub enum KeyOwner {
     /// Not read yet.
     #[default]
@@ -249,6 +253,7 @@ pub enum KeyOwner {
     Unknown(String),
 }
 
+#[cfg_attr(not(feature = "webos"), allow(dead_code))] // used by the TV backend (and tests)
 impl KeyOwner {
     pub fn code(&self) -> &'static str {
         match self {
@@ -270,6 +275,7 @@ impl KeyOwner {
 
 /// Makers by HDMI-CEC vendor id (IEEE OUI), for devices that report a model
 /// name but no brand. Chip makers (Amlogic, Realtek…) are left out on purpose.
+#[cfg_attr(not(feature = "webos"), allow(dead_code))] // used by the TV backend (and tests)
 pub fn cec_vendor(id: u64) -> Option<&'static str> {
     Some(match id {
         0x0005CD => "Denon",
@@ -316,6 +322,7 @@ pub struct Preview {
 }
 
 /// Decodes the uncompressed 24/32-bit BMP the TV's capture service writes.
+#[cfg_attr(not(feature = "webos"), allow(dead_code))] // used by the TV backend (and tests)
 pub fn decode_bmp(b: &[u8]) -> Option<(usize, usize, Vec<u8>)> {
     let u32_at = |o: usize| b.get(o..o + 4).map(|x| u32::from_le_bytes([x[0], x[1], x[2], x[3]]));
     let i32_at = |o: usize| u32_at(o).map(|v| v as i32);
@@ -373,6 +380,7 @@ pub struct TvState {
 
 pub type Shared = Arc<Mutex<TvState>>;
 
+#[cfg_attr(feature = "webos", allow(dead_code))] // Refresh comes from the desktop preview (F5)
 pub enum Command {
     /// Opens an app (an input's app, or the media player) with optional params.
     Launch(String, Option<serde_json::Value>),
@@ -401,6 +409,7 @@ impl Backend {
 }
 
 /// Mock inputs for the desktop preview, shaped like the C1's.
+#[cfg(not(feature = "webos"))]
 pub fn mock_backend(repaint: impl Fn() + Send + 'static) -> Backend {
     let state: Shared = Arc::default();
     let (tx, rx) = mpsc::channel::<Command>();
@@ -480,9 +489,15 @@ pub fn mock_backend(repaint: impl Fn() + Send + 'static) -> Backend {
         repaint();
         while let Ok(cmd) = rx.recv() {
             match cmd {
-                Command::Launch(app, _) => s.lock().unwrap().foreground = Some(app),
+                Command::Launch(app, params) => {
+                    if std::env::var_os("LG_DEBUG").is_some() {
+                        eprintln!("launch {app} {params:?}");
+                    }
+                    s.lock().unwrap().foreground = Some(app)
+                }
                 Command::Takeover(on) => s.lock().unwrap().key_owner = if on { KeyOwner::Picker } else { KeyOwner::Lg },
                 Command::CaptureAccess(on) => s.lock().unwrap().capture_access = Some(on),
+                Command::Cec { app_id, key } if std::env::var_os("LG_DEBUG").is_some() => eprintln!("cec {app_id} {key:#x}"),
                 Command::Refresh | Command::Cec { .. } => {}
             }
             repaint();

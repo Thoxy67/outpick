@@ -267,10 +267,6 @@ impl Drop for Connection {
     }
 }
 
-pub fn call(uri: &str, payload: &Value) -> Result<Value, String> {
-    call_with_timeout(uri, payload, Duration::from_millis(6500))
-}
-
 thread_local! {
     /// One LS2 registration per calling thread, kept between calls.
     static CONNECTION: RefCell<Option<Connection>> = const { RefCell::new(None) };

@@ -49,6 +49,7 @@ static CURRENT: RwLock<Lang> = RwLock::new(Lang::En);
 /// The system locale ("fr-FR"), set by the TV backend or from $LANG.
 static SYSTEM: RwLock<Option<String>> = RwLock::new(None);
 
+#[cfg_attr(not(feature = "webos"), allow(dead_code))] // the desktop reads $LANG in select()
 pub fn set_system_locale(locale: &str) {
     if let Ok(mut s) = SYSTEM.write() {
         *s = Some(locale.to_string());
