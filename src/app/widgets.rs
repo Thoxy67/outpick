@@ -163,6 +163,30 @@ pub(super) fn cycle<T: Copy + PartialEq>(all: &[T], cur: T, dir: i32) -> T {
     all[((i + dir).rem_euclid(n)) as usize]
 }
 
+/// The next (`dir` 1) or previous (-1) value of a sorted list of numbers, wrapping around.
+/// A value not in the list (set by hand in config.json) steps from where it falls in it:
+/// 7 in [5, 10, 15] goes to 10 or 5, not to the first entry.
+#[allow(dead_code)] // for the numeric settings rows (src/app/settings.rs)
+pub(super) fn cycle_num(all: &[u32], cur: u32, dir: i32) -> u32 {
+    let n = all.len();
+    if n == 0 {
+        return cur;
+    }
+    if let Some(i) = all.iter().position(|&v| v == cur) {
+        return all[(i as i32 + dir).rem_euclid(n as i32) as usize];
+    }
+    // Between all[below - 1] and all[below]: up takes the next larger, down the next smaller.
+    let below = all.iter().take_while(|&&v| v < cur).count();
+    if dir > 0 {
+        all[below % n]
+    } else if dir < 0 {
+        all[(below + n - 1) % n]
+    } else {
+        // No step: the nearest value.
+        *all.iter().min_by_key(|&&v| v.abs_diff(cur)).unwrap()
+    }
+}
+
 pub(super) fn step(v: f32, by: f32, dir: i32) -> f32 {
     ((v + by * dir as f32) / by).round() * by
 }
@@ -222,4 +246,54 @@ pub(super) fn gradient(p: &egui::Painter, rect: Rect, a: Color32, b: Color32, ve
     mesh.add_triangle(0, 1, 2);
     mesh.add_triangle(0, 2, 3);
     p.add(egui::Shape::mesh(mesh));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn cycle_wraps_and_starts_from_the_first_unknown() {
+        let all = [Layout::Row, Layout::Grid, Layout::List];
+        assert_eq!(cycle(&all, Layout::Row, 1), Layout::Grid);
+        assert_eq!(cycle(&all, Layout::Row, -1), Layout::List);
+        assert_eq!(cycle(&all, Layout::List, 1), Layout::Row);
+        assert_eq!(cycle(&all, Layout::Sidebar, 1), Layout::Grid);
+    }
+
+    #[test]
+    fn cycle_num_steps_from_where_the_value_falls() {
+        let secs = [0, 5, 10, 15, 30, 60];
+        assert_eq!(cycle_num(&secs, 10, 1), 15);
+        assert_eq!(cycle_num(&secs, 10, -1), 5);
+        assert_eq!(cycle_num(&secs, 60, 1), 0);
+        assert_eq!(cycle_num(&secs, 0, -1), 60);
+        // Hand-set values.
+        assert_eq!(cycle_num(&secs, 7, 1), 10);
+        assert_eq!(cycle_num(&secs, 7, -1), 5);
+        assert_eq!(cycle_num(&secs, 7, 0), 5);
+        assert_eq!(cycle_num(&secs, 120, 1), 0);
+        assert_eq!(cycle_num(&secs, 120, -1), 60);
+        let fps = [1, 2, 4];
+        assert_eq!(cycle_num(&fps, 3, 1), 4);
+        assert_eq!(cycle_num(&fps, 3, -1), 2);
+        assert_eq!(cycle_num(&[], 3, 1), 3);
+    }
+
+    #[test]
+    fn step_snaps_to_the_grid() {
+        assert!((step(1.0, 0.1, 1) - 1.1).abs() < 1e-6);
+        assert!((step(1.03, 0.1, -1) - 0.9).abs() < 1e-6);
+        assert!((step(0.35, 0.05, 1) - 0.4).abs() < 1e-6);
+    }
+
+    #[test]
+    fn keep_visible_and_grid_cols() {
+        assert_eq!(keep_visible(3, 10, 5), 0);
+        assert_eq!(keep_visible(0, 4, 10), 0);
+        assert_eq!(keep_visible(5, 4, 10), 3);
+        assert_eq!(keep_visible(9, 4, 10), 6);
+        let cols: Vec<usize> = (0..=9).map(grid_cols).collect();
+        assert_eq!(cols, [1, 1, 2, 3, 4, 3, 3, 4, 4, 4]);
+    }
 }
