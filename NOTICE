@@ -1,4 +1,4 @@
-Inputs (lg-c1-source) includes or adapts the following third-party work.
+Outpick includes or adapts the following third-party work.
 
 Luma (https://github.com/ecklf/lg-luma), MIT License, Copyright (c) 2026 Luma contributors:
   src/webos/luna.rs, src/webos/sdl_events.rs, src/webos/compat.rs and tools/setup-webos-sdk.mjs,

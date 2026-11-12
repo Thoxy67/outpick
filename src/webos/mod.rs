@@ -18,15 +18,15 @@ use sdl2::video::GLProfile;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-pub const APP_ID: &str = "com.thoxy.sourcepicker";
+pub const APP_ID: &str = "com.thoxy.outpick";
 
-/// Startup trace (`LG_SOURCE_TRACE=1`, or the file /tmp/lg-c1-source.trace):
+/// Startup trace (`OUTPICK_TRACE=1`, or the file /tmp/outpick.trace):
 /// prints the milliseconds since the process started at each step.
 pub(crate) fn trace(step: &str) {
     static START: std::sync::OnceLock<Option<u64>> = std::sync::OnceLock::new();
     let start = START.get_or_init(|| {
-        let on = std::env::var_os("LG_SOURCE_TRACE").is_some_and(|v| v == "1")
-            || std::path::Path::new("/tmp/lg-c1-source.trace").exists();
+        let on = std::env::var_os("OUTPICK_TRACE").is_some_and(|v| v == "1")
+            || std::path::Path::new("/tmp/outpick.trace").exists();
         on.then(|| process_start_us().unwrap_or_else(now_us))
     });
     if let Some(start) = start {
@@ -76,7 +76,7 @@ pub fn run() -> Result<(), String> {
         gl.set_double_buffer(true);
     }
     let mut window = video
-        .window("Inputs", 1920, 1080)
+        .window("Outpick", 1920, 1080)
         .opengl()
         .fullscreen_desktop()
         .build()

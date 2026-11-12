@@ -62,7 +62,7 @@ pub fn run() {
     let arg = |name: &str| args.iter().position(|a| a == name).and_then(|i| args.get(i + 1)).cloned();
     if let Some(cfg) = arg("--config") {
         // SAFETY: before any thread is started.
-        unsafe { std::env::set_var("LG_SOURCE_CONFIG", cfg) };
+        unsafe { std::env::set_var("OUTPICK_CONFIG", cfg) };
     }
     let size = arg("--size")
         .and_then(|s| {
@@ -86,7 +86,7 @@ pub fn run() {
         ..Default::default()
     };
     let _ = eframe::run_native(
-        "lg-c1-source",
+        "outpick",
         options,
         Box::new(move |cc| {
             let ctx = cc.egui_ctx.clone();
@@ -141,7 +141,7 @@ impl eframe::App for Preview {
         if self.script.is_some() {
             keys.retain(|k| !matches!(k, Nav::Pointer(_) | Nav::Click(_) | Nav::Scroll(_)));
         }
-        if !keys.is_empty() && std::env::var_os("LG_DEBUG").is_some() {
+        if !keys.is_empty() && std::env::var_os("OUTPICK_DEBUG").is_some() {
             eprintln!("keys: {keys:?}");
         }
         // Scripted run: feed keys after a few frames, then capture once settled.
@@ -215,7 +215,7 @@ fn fake_picture(ui: &egui::Ui, r: egui::Rect) {
     p.circle_filled(r.center() + egui::vec2(-r.width() * 0.2, -r.height() * 0.15), r.height() * 0.12, egui::Color32::from_rgb(250, 220, 150));
 }
 
-/// Seconds to wait after the last key before the screenshot (LG_SHOT_DELAY, default 0.8).
+/// Seconds to wait after the last key before the screenshot (OUTPICK_SHOT_DELAY, default 0.8).
 fn shot_delay() -> f64 {
-    std::env::var("LG_SHOT_DELAY").ok().and_then(|v| v.parse().ok()).unwrap_or(0.8)
+    std::env::var("OUTPICK_SHOT_DELAY").ok().and_then(|v| v.parse().ok()).unwrap_or(0.8)
 }

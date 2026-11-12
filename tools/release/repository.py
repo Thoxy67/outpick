@@ -5,7 +5,7 @@
 
 Writes into DIR, next to the release's .ipk:
   repo.json                         the Homebrew Channel feed (one package)
-  com.thoxy.sourcepicker.manifest.json
+  com.thoxy.outpick.manifest.json
   description.html                  the long description the feed links to
   largeIcon.png                     the icon the feed shows
 

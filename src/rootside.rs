@@ -13,41 +13,44 @@ pub const CHAIN_CPP: &str = "com.webos.surfacemanager.keyFiltersCpp";
 pub const GLASSHOUSE_KEYS: &str = "glasshouse.remoteKeys";
 /// Which keys our filter takes, `{"source": bool, "multikey": bool}`; the
 /// filter subscribes to it, so a change applies with nothing reloaded.
-pub const KEYS: &str = "com.thoxy.sourcepicker.keys";
+pub const KEYS: &str = "com.thoxy.outpick.keys";
 /// Our filter's handler: how our chain entry is recognised, wherever its file.
-pub const HANDLER: &str = "handleLgSourcePicker";
+pub const HANDLER: &str = "handleOutpick";
 
 /// Root's own folder: the filter (code the compositor runs) and the takeover
 /// marker. 0755 root, so no jailed app can change them.
-pub const ROOT_DIR: &str = "/var/lib/lg-c1-source";
-pub const FILTER: &str = "/var/lib/lg-c1-source/keyfilter.js";
+pub const ROOT_DIR: &str = "/var/lib/outpick";
+pub const FILTER: &str = "/var/lib/outpick/keyfilter.js";
 /// Present while the takeover is wanted: the boot hook puts it back if configd lost it.
-pub const WANTED: &str = "/var/lib/lg-c1-source/wanted";
+pub const WANTED: &str = "/var/lib/outpick/wanted";
 /// The folder shared with the jailed app (settings, previews). Earlier builds
 /// kept the filter here too.
-pub const SHARED_DIR: &str = "/media/developer/lg-c1-source";
+pub const SHARED_DIR: &str = "/media/developer/outpick";
 pub const OLD_FILTER: &str = "/media/developer/lg-c1-source/keyfilter.js";
+/// Before the Outpick rename: the app id and the filter's handler (settings: config.rs).
+pub const LEGACY_APP_ID: &str = "com.thoxy.sourcepicker";
+pub const LEGACY_HANDLER: &str = "handleLgSourcePicker";
 /// The Homebrew Channel runs these at boot (BusyBox run-parts: no dot in the name).
 pub const HOOK_DIR: &str = "/var/lib/webosbrew/init.d";
-pub const HOOK: &str = "/var/lib/webosbrew/init.d/70-lg-c1-source";
+pub const HOOK: &str = "/var/lib/webosbrew/init.d/70-outpick";
 
 pub const WHITELIST_SYSTEM: &str = "/etc/palm/whitelist-conf.json";
 pub const WHITELIST_USER: &str = "/home/root/whitelist-conf.json";
 /// Left by earlier builds, which kept the user file aside here.
-pub const WHITELIST_BACKUP: &str = "/home/root/whitelist-conf.json.lg-c1-source.bak";
+pub const WHITELIST_BACKUP: &str = "/home/root/whitelist-conf.json.outpick.bak";
 
 /// Where the Homebrew Channel installs the app, by app id.
 pub fn app_binaries(app_id: &str) -> [String; 2] {
     [
-        format!("/media/developer/apps/usr/palm/applications/{app_id}/source-picker"),
-        format!("/media/cryptofs/apps/usr/palm/applications/{app_id}/source-picker"),
+        format!("/media/developer/apps/usr/palm/applications/{app_id}/outpick"),
+        format!("/media/cryptofs/apps/usr/palm/applications/{app_id}/outpick"),
     ]
 }
 
 // ---- the filter chain ----
 
 pub fn is_ours(entry: &Value) -> bool {
-    entry.get("handler").and_then(Value::as_str) == Some(HANDLER)
+    matches!(entry.get("handler").and_then(Value::as_str), Some(h) if h == HANDLER || h == LEGACY_HANDLER)
 }
 
 /// The chain with every entry of ours taken out, the rest in order.
@@ -68,7 +71,7 @@ pub fn keys_value(source: bool, multikey: bool) -> Value {
 
 /// The `sed` program the boot hook takes our entry out of the chain with, on
 /// configd's one-line JSON array (entries are flat `{file, handler}` objects).
-pub const CHAIN_SED: &str = r#"s/{[^{}]*"handleLgSourcePicker"[^{}]*} *,\{0,1\}//g; s/, *\]/]/g"#;
+pub const CHAIN_SED: &str = r#"s/{[^{}]*"handleOutpick"[^{}]*} *,\{0,1\}//g; s/{[^{}]*"handleLgSourcePicker"[^{}]*} *,\{0,1\}//g; s/, *\]/]/g"#;
 
 /// The `sed -n` program that picks the chain's array out of configd's reply.
 pub fn chain_extract_sed() -> String {
@@ -88,99 +91,99 @@ pub fn filter_source(app_id: &str) -> String {
         .replace("@CHAIN@", CHAIN)
 }
 
-const FILTER_TEMPLATE: &str = r#"/* Written by lg-c1-source (@APP_ID@): the remote's Source key opens it,
+const FILTER_TEMPLATE: &str = r#"/* Written by outpick (@APP_ID@): the remote's Source key opens it,
  * and, if chosen, a short press on Multikey (a long one stays LG's accessibility).
  * Which of the two is the configd value @KEYS@,
  * { "source": bool, "multikey": bool }, followed from init(): a change applies
  * at once, with nothing reloaded. First in @CHAIN@;
  * every other key goes on to LG's filters.
- * Undo: Customize > Source key, or `source-picker --takeover off` as root. */
-var lgSourcePickerId = "@APP_ID@";
+ * Undo: Customize > Source key, or `outpick --takeover off` as root. */
+var outpickId = "@APP_ID@";
 // Until configd answers: the Source key only.
-var lgSourcePickerSource = true;
-var lgSourcePickerMultikey = false;
-var lgSourcePickerSourceKeys = (function () {
+var outpickSource = true;
+var outpickMultikey = false;
+var outpickSourceKeys = (function () {
     var keys = [];
     try { keys.push(WebOS.Key_webOS_InputSource); } catch (e) {}
     try { keys.push(WebOS.Key_webOS_LocalInputSource); } catch (e) {}
     return keys;
 })();
-var lgSourcePickerMultiDown = false;
-var lgSourcePickerMultiLong = false;
-var lgSourcePickerPress = 0;
-var lgSourcePickerLaunch = 0;
+var outpickMultiDown = false;
+var outpickMultiLong = false;
+var outpickPress = 0;
+var outpickLaunch = 0;
 
-function lgSourcePickerKeysChanged(payload) {
+function outpickKeysChanged(payload) {
     try {
         var r = typeof payload === "string" ? JSON.parse(payload) : payload;
         var v = r && r.configs && r.configs["@KEYS@"];
         if (v && typeof v === "object") {
-            lgSourcePickerSource = v.source !== false;
-            lgSourcePickerMultikey = v.multikey === true;
+            outpickSource = v.source !== false;
+            outpickMultikey = v.multikey === true;
         }
     } catch (e) {
-        console.warn("lg-c1-source keyfilter: " + e + "; keys left as they were");
+        console.warn("outpick keyfilter: " + e + "; keys left as they were");
     }
 }
 
-var lgSourcePickerFollowing = false;
+var outpickFollowing = false;
 
 function init() {
-    if (lgSourcePickerFollowing) return;
-    lgSourcePickerFollowing = true;
+    if (outpickFollowing) return;
+    outpickFollowing = true;
     try {
         lunaCall.subscribe("com.webos.service.config", "/getConfigs",
-            JSON.stringify({ "configNames": ["@KEYS@"], "subscribe": true }), lgSourcePickerKeysChanged, true);
+            JSON.stringify({ "configNames": ["@KEYS@"], "subscribe": true }), outpickKeysChanged, true);
     } catch (e) {
-        console.warn("lg-c1-source keyfilter: " + e + "; Source key only");
+        console.warn("outpick keyfilter: " + e + "; Source key only");
     }
 }
 
-function lgSourcePickerInFront() {
+function outpickInFront() {
     try {
         return typeof global !== "undefined" && typeof global.isForegroundApp === "function" &&
-            global.isForegroundApp(lgSourcePickerId) === true;
+            global.isForegroundApp(outpickId) === true;
     } catch (e) {
         return false;
     }
 }
 
 // LG's own picker, if ours cannot be opened.
-function lgSourcePickerFallback() {
+function outpickFallback() {
     lunaCall.send("com.webos.service.systemUIManager", "/launch",
         JSON.stringify({ "appId": "com.webos.app.quickinputpicker" }), function () {});
 }
 
 // Opens the picker, or, when it is already open, moves it to the next input
 // (sent as Tab, which the picker reads as the Source key).
-function lgSourcePickerOpen() {
-    if (lgSourcePickerInFront()) {
+function outpickOpen() {
+    if (outpickInFront()) {
         global.sendKeyToFocusWindow(Qt.Key_Tab, true, 15);
         global.sendKeyToFocusWindow(Qt.Key_Tab, false, 15);
         return;
     }
-    var launch = ++lgSourcePickerLaunch;
+    var launch = ++outpickLaunch;
     var answered = false;
     lunaCall.send("com.webos.applicationManager", "/launch",
-        JSON.stringify({ "id": lgSourcePickerId }), function (payload) {
+        JSON.stringify({ "id": outpickId }), function (payload) {
             answered = true;
             try {
                 var r = typeof payload === "string" ? JSON.parse(payload) : payload;
-                if (!r || r.returnValue === false) lgSourcePickerFallback();
+                if (!r || r.returnValue === false) outpickFallback();
             } catch (e) {
-                lgSourcePickerFallback();
+                outpickFallback();
             }
         });
     // The app manager may never answer: LG's picker then, so the key is never dead.
     try {
         genericTimer.set(1500, function () {
-            if (!answered && launch === lgSourcePickerLaunch && !lgSourcePickerInFront()) lgSourcePickerFallback();
+            if (!answered && launch === outpickLaunch && !outpickInFront()) outpickFallback();
         });
     } catch (e) {}
 }
 
 // What LG's long Multikey press opens (appLaunch.js launchAccessibilityOverlay).
-function lgSourcePickerAccessibility() {
+function outpickAccessibility() {
     try {
         if (typeof configdService !== "undefined" && configdService.supportNMRM)
             applicationManager.launch("com.palm.app.settings", JSON.stringify({ "target": "accessibility", "item": "audioGuidance" }));
@@ -195,39 +198,39 @@ function lgSourcePickerAccessibility() {
 function @HANDLER@(key, pressed, autoRepeat) {
     try {
         // Should the compositor not have called init(), follow the keys from the first key on.
-        if (!lgSourcePickerFollowing) init();
-        if (lgSourcePickerSourceKeys.indexOf(key) >= 0) {
-            if (!lgSourcePickerSource) return KeyPolicy.NextPolicy;
-            if (pressed && !autoRepeat) lgSourcePickerOpen();
+        if (!outpickFollowing) init();
+        if (outpickSourceKeys.indexOf(key) >= 0) {
+            if (!outpickSource) return KeyPolicy.NextPolicy;
+            if (pressed && !autoRepeat) outpickOpen();
             return KeyPolicy.Accepted;
         }
         var multi = -1;
         try { multi = WebOS.Key_webOS_Multikey; } catch (e) {}
         // Off: LG's, except the release of a press taken while it was on.
-        if (key !== multi || (!lgSourcePickerMultikey && !lgSourcePickerMultiDown))
+        if (key !== multi || (!outpickMultikey && !outpickMultiDown))
             return KeyPolicy.NextPolicy;
         // Multikey: short press = the picker, held 2 s = LG's accessibility.
         if (pressed) {
             if (!autoRepeat) {
-                lgSourcePickerMultiDown = true;
-                lgSourcePickerMultiLong = false;
-                var press = ++lgSourcePickerPress;
+                outpickMultiDown = true;
+                outpickMultiLong = false;
+                var press = ++outpickPress;
                 try {
                     genericTimer.set(2000, function () {
-                        if (lgSourcePickerMultiDown && press === lgSourcePickerPress) {
-                            lgSourcePickerMultiLong = true;
-                            lgSourcePickerAccessibility();
+                        if (outpickMultiDown && press === outpickPress) {
+                            outpickMultiLong = true;
+                            outpickAccessibility();
                         }
                     });
                 } catch (e) {}
             }
             return KeyPolicy.Accepted;
         }
-        lgSourcePickerMultiDown = false;
-        if (!lgSourcePickerMultiLong) lgSourcePickerOpen();
+        outpickMultiDown = false;
+        if (!outpickMultiLong) outpickOpen();
         return KeyPolicy.Accepted;
     } catch (e) {
-        console.warn("lg-c1-source keyfilter: " + e);
+        console.warn("outpick keyfilter: " + e);
         return KeyPolicy.NextPolicy;
     }
 }
@@ -252,6 +255,8 @@ pub fn whitelist_add(json: &str, id: &str) -> Result<String, String> {
         .entry("forceCaptureClient")
         .or_insert_with(|| json!([]));
     let arr = list.as_array_mut().ok_or("forceCaptureClient is not a list")?;
+    // The id this app had before the Outpick rename goes: one entry, the current one.
+    arr.retain(|c| c.as_str() != Some(LEGACY_APP_ID));
     if !arr.iter().any(|c| c.as_str() == Some(id)) {
         arr.push(json!(id));
     }
@@ -281,7 +286,7 @@ pub fn whitelist_remove(json: &str, id: &str, system_json: &str) -> Option<Strin
         return Some(json.to_string());
     };
     if let Some(arr) = conf.get_mut("forceCaptureClient").and_then(Value::as_array_mut) {
-        arr.retain(|c| c.as_str() != Some(id));
+        arr.retain(|c| c.as_str() != Some(id) && c.as_str() != Some(LEGACY_APP_ID));
     }
     if let Ok(system) = serde_json::from_str::<Value>(system_json)
         && whitelist_same(&conf, &system)
@@ -337,7 +342,7 @@ pub fn whitelist_enforced(os_release: &str) -> bool {
 /// The boot hook, copied (not linked) into the Homebrew Channel's init.d by
 /// `--takeover on` and `--capture-access on`, so that it still runs once the
 /// app is uninstalled: then it undoes what the app set up as root and deletes
-/// itself. While the app is there it runs `source-picker --boot`.
+/// itself. While the app is there it runs `outpick --boot`.
 pub fn hook_script(app_id: &str) -> String {
     let [developer, cryptofs] = app_binaries(app_id);
     HOOK_TEMPLATE
@@ -358,7 +363,7 @@ pub fn hook_script(app_id: &str) -> String {
 }
 
 const HOOK_TEMPLATE: &str = r#"#!/bin/sh
-# lg-c1-source (@APP_ID@) boot hook, written by `source-picker --takeover on`
+# outpick (@APP_ID@) boot hook, written by `outpick --takeover on`
 # or `--capture-access on`. A copy, not a link: once the app is uninstalled it
 # still runs, once, to undo what the app set up as root, then deletes itself.
 APP=@APP_DEV@
@@ -418,7 +423,7 @@ exit 0
 mod tests {
     use super::*;
 
-    const APP: &str = "com.thoxy.sourcepicker";
+    const APP: &str = "com.thoxy.outpick";
 
     fn lg(handler: &str) -> Value {
         json!({ "handler": handler, "file": "/usr/lib/qt5/qml/KeyFilters/appLaunch.js" })
@@ -473,7 +478,7 @@ mod tests {
         assert!(f.contains(&format!("function {HANDLER}(key, pressed, autoRepeat)")));
         assert!(f.contains("function init()"));
         assert!(f.contains(&format!("\"{KEYS}\"")));
-        assert!(f.contains(&format!("var lgSourcePickerId = \"{APP}\";")));
+        assert!(f.contains(&format!("var outpickId = \"{APP}\";")));
         assert!(f.contains("genericTimer.set(1500"));
         // Constant: the chosen keys are not in the text.
         assert_eq!(f, filter_source(APP));
@@ -482,7 +487,7 @@ mod tests {
     /// Checks the filter with node when the machine has it.
     #[test]
     fn filter_parses() {
-        let dir = std::env::temp_dir().join(format!("lg-c1-source-test-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("outpick-test-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let file = dir.join("keyfilter.js");
         std::fs::write(&file, filter_source(APP)).unwrap();
@@ -581,7 +586,7 @@ mod tests {
         if std::process::Command::new("node").arg("--version").output().is_err() {
             return;
         }
-        let dir = std::env::temp_dir().join(format!("lg-c1-source-wl-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("outpick-wl-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let (u, s, b) = (dir.join("user.json"), dir.join("system.json"), dir.join("user.json.bak"));
         std::fs::write(&s, SYSTEM).unwrap();
@@ -622,4 +627,16 @@ mod tests {
             Ok(String::from_utf8_lossy(&out.stdout).into_owned())
         }
     }
+
+    #[test]
+    fn legacy_entry_is_replaced() {
+        let legacy = json!({ "handler": LEGACY_HANDLER, "file": OLD_FILTER });
+        let lg = json!({ "handler": "handleLg", "file": "/usr/lib/lg.js" });
+        assert!(is_ours(&legacy));
+        let chain = chain_with_ours_first(vec![lg.clone(), legacy], FILTER);
+        assert_eq!(chain, vec![json!({ "file": FILTER, "handler": HANDLER }), lg]);
+        let wl = whitelist_add(r#"{"forceCaptureClient":["com.thoxy.sourcepicker"]}"#, "com.thoxy.outpick").unwrap();
+        assert!(wl.contains("com.thoxy.outpick") && !wl.contains("sourcepicker"));
+    }
+
 }

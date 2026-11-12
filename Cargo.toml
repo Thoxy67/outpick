@@ -1,13 +1,14 @@
 [package]
-name = "lg-c1-source"
+name = "outpick"
 version = "0.1.0"
 edition = "2024"
 license = "MIT"
 readme = "README.md"
 description = "A modern, customizable native source/input picker overlay for rooted LG webOS TVs"
+repository = "https://git.thoxy.xyz/thoxy/outpick"
 
 [[bin]]
-name = "source-picker"
+name = "outpick"
 path = "src/main.rs"
 
 [features]

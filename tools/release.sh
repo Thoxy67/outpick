@@ -11,7 +11,7 @@ cd "$(dirname "$0")/.."
 git rev-parse -q --verify "refs/tags/v$V" >/dev/null && { echo "tag v$V exists" >&2; exit 1; }
 
 sed -i "0,/^version = \".*\"/s//version = \"$V\"/" Cargo.toml
-cargo update -p lg-c1-source --offline >/dev/null 2>&1 || cargo metadata --format-version 1 >/dev/null
+cargo update -p outpick --offline >/dev/null 2>&1 || cargo metadata --format-version 1 >/dev/null
 
 notes="$(tools/release/changelog.py --title "v$V — $(date +%Y-%m-%d)")"
 { printf '%s\n\n' "$notes"; [[ -f CHANGELOG.md ]] && cat CHANGELOG.md; } > CHANGELOG.md.new

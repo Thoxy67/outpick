@@ -122,14 +122,14 @@ pub fn request(on: bool) -> Result<(), String> {
     }
 }
 
-/// `source-picker --capture-access on|off|status`.
+/// `outpick --capture-access on|off|status`.
 pub fn cli(arg: &str) -> i32 {
     let result = match arg {
         "on" => set(true),
         "off" | "restore" => set(false),
         "status" => Ok(()),
         _ => {
-            eprintln!("usage: source-picker --capture-access on|off|status");
+            eprintln!("usage: outpick --capture-access on|off|status");
             return 2;
         }
     };

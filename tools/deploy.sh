@@ -21,7 +21,7 @@ ENV_TV=${TV:-} ENV_SSH_OPTS=${SSH_OPTS-unset}
 [ -n "$ENV_TV" ] && TV=$ENV_TV
 [ "$ENV_SSH_OPTS" != unset ] && SSH_OPTS=$ENV_SSH_OPTS
 TV=${1:-${TV:-192.168.1.180}}
-ID=com.thoxy.sourcepicker
+ID=com.thoxy.outpick
 SSH="ssh -o ConnectTimeout=5 ${SSH_OPTS:-} root@$TV"
 "$ROOT/tools/build-webos.sh" >/dev/null
 # package.py prints the .ipk it wrote on its first line.

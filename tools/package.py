@@ -14,10 +14,10 @@ import gzip, io, json, os, struct, subprocess, tarfile, zlib
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-APP_ID = "com.thoxy.sourcepicker"
+APP_ID = "com.thoxy.outpick"
 # The version is Cargo.toml's (tools/release.sh sets it; the release workflow checks the tag).
 VERSION = next(l.split('"')[1] for l in (ROOT / "Cargo.toml").read_text().splitlines() if l.startswith("version = "))
-BIN = ROOT / "target/armv7-unknown-linux-gnueabi/release/source-picker"
+BIN = ROOT / "target/armv7-unknown-linux-gnueabi/release/outpick"
 SDL = ROOT / ".build/sdl-webos/lib/libSDL2-2.0.so.0"
 
 APPINFO = {
@@ -25,8 +25,8 @@ APPINFO = {
     "version": VERSION,
     "vendor": "thoxy",
     "type": "native",
-    "main": "source-picker",
-    "title": "Inputs",
+    "main": "outpick",
+    "title": "Outpick",
     "appDescription": "A modern, customizable input picker for rooted LG webOS TVs: HDMI inputs with device names and live previews, CEC options, USB and media servers.",
     "icon": "icon.png",
     "largeIcon": "largeIcon.png",
@@ -130,7 +130,7 @@ def main():
         # Icon 2 of assets/app-icons (HDMI port flowing into a screen).
         (base + "icon.png", (ROOT / "assets/app-icons/app-icon-80.png").read_bytes(), 0o644),
         (base + "largeIcon.png", (ROOT / "assets/app-icons/app-icon-130.png").read_bytes(), 0o644),
-        (base + "source-picker", BIN.read_bytes(), 0o755),
+        (base + "outpick", BIN.read_bytes(), 0o755),
         (base + "lib/libSDL2-2.0.so.0", SDL.read_bytes(), 0o755),
         (f"usr/palm/packages/{APP_ID}/packageinfo.json", json.dumps(packageinfo, indent=2).encode(), 0o644),
     ]
@@ -138,7 +138,7 @@ def main():
     installed = sum(len(d) for _, d, _ in data_entries) // 1024
     control = (f"Package: {APP_ID}\nVersion: {VERSION}\nSection: misc\nPriority: optional\n"
                f"Architecture: arm\nInstalled-Size: {installed}\nMaintainer: thoxy\n"
-               f"Description: Inputs - a customizable source picker\nwebOS-Package-Format-Version: 2\n"
+               f"Description: Outpick - a customizable source picker\nwebOS-Package-Format-Version: 2\n"
                f"webOS-Packager-Version: 1.0.0\n").encode()
     ctrl = tar_gz([("control", control, 0o644)], mtime)
     out = ROOT / "dist" / f"{APP_ID}_{VERSION}_arm.ipk"

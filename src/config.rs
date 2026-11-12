@@ -302,26 +302,34 @@ impl Default for Config {
 }
 
 impl Config {
-    /// `$LG_SOURCE_CONFIG`, else /media/developer/lg-c1-source/config.json on
+    /// `$OUTPICK_CONFIG`, else /media/developer/outpick/config.json on
     /// the TV (writable by the jailed app and its root helper, kept across
     /// reinstalls), else the desktop config dir.
     pub fn path() -> PathBuf {
-        if let Some(p) = std::env::var_os("LG_SOURCE_CONFIG") {
+        if let Some(p) = std::env::var_os("OUTPICK_CONFIG") {
             return p.into();
         }
         if cfg!(feature = "webos") {
-            return "/media/developer/lg-c1-source/config.json".into();
+            return "/media/developer/outpick/config.json".into();
         }
         let base = std::env::var_os("XDG_CONFIG_HOME")
             .map(PathBuf::from)
             .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".config")))
             .unwrap_or_else(|| ".".into());
-        base.join("lg-c1-source/config.json")
+        base.join("outpick/config.json")
     }
 
     pub fn load() -> Self {
-        let mut c: Config = std::fs::read(Self::path())
+        let path = Self::path();
+        // Before the Outpick rename the settings lived in /media/developer/lg-c1-source.
+        let legacy = || {
+            (cfg!(feature = "webos") && std::env::var_os("OUTPICK_CONFIG").is_none())
+                .then(|| std::fs::read("/media/developer/lg-c1-source/config.json").ok())
+                .flatten()
+        };
+        let mut c: Config = std::fs::read(&path)
             .ok()
+            .or_else(legacy)
             .and_then(|b| serde_json::from_slice(&b).map_err(|e| eprintln!("config: {e}; using defaults")).ok())
             .unwrap_or_default();
         c.clamp();

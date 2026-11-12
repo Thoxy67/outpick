@@ -111,15 +111,3 @@ jobs:
           GIT_COMMITTER_NAME: Forgejo Actions
           GIT_COMMITTER_EMAIL: actions@noreply.invalid
         run: tools/release/publish-feed-branch.sh "${{ steps.v.outputs.tag }}" dist/release origin
-      # TODO(remove after the first release with the hbc feed): the old feed URL, the generic
-      # package "latest" (delete + upload, needs write:package). TVs that still list it get
-      # one more update pointing them at the new URL in the README; then drop this step and
-      # tools/release/publish-repo.sh.
-      - name: Publish the Homebrew Channel repository (old generic package, to be removed)
-        if: steps.v.outputs.prerelease == ''
-        continue-on-error: true
-        env:
-          FORGEJO_URL: ${{ github.server_url }}
-          FORGEJO_REPO: ${{ github.repository }}
-          FORGEJO_TOKEN: ${{ secrets.FORGEJO_TOKEN || github.token }}
-        run: tools/release/publish-repo.sh dist/release

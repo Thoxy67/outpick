@@ -11,9 +11,9 @@
 //! never goes dead.
 //!
 //! The filter is code the compositor runs, so it lives in root's own
-//! /var/lib/lg-c1-source (0755), never in the folder shared with the jailed
+//! /var/lib/outpick (0755), never in the folder shared with the jailed
 //! app. Its text is the same whatever keys are chosen: those are the configd
-//! value `com.thoxy.sourcepicker.keys`, which the filter follows. Changing the
+//! value `com.thoxy.outpick.keys`, which the filter follows. Changing the
 //! chain makes the compositor reload every filter, LG's included (in Game mode
 //! that pops the Game Dashboard), so the chain is written only to put the
 //! filter in or take it out, or when a new version changes its text.
@@ -247,9 +247,17 @@ pub fn request(on: bool) -> Result<(), String> {
 
 /// From the app at launch: earlier builds kept the filter in the shared
 /// (world-writable) folder. While it is still there and the chain points at it,
-/// has root move it to /var/lib/lg-c1-source (the chain reloads once). Costs
+/// has root move it to /var/lib/outpick (the chain reloads once). Costs
 /// nothing once moved: only a file check.
 pub fn migrate() {
+    // Capture access granted to the app's id before the Outpick rename: move it to the new id.
+    if let Ok(wl) = std::fs::read_to_string(rootside::WHITELIST_USER)
+        && wl.contains(rootside::LEGACY_APP_ID)
+        && !wl.contains(super::APP_ID)
+        && let Err(e) = super::capture::request(true)
+    {
+        eprintln!("capture access move: {e}");
+    }
     if !Path::new(OLD_FILTER).exists() {
         return;
     }
@@ -280,12 +288,12 @@ pub fn sync_hook() {
     }
 }
 
-/// `source-picker --boot`, from the boot hook (root): puts the takeover back
+/// `outpick --boot`, from the boot hook (root): puts the takeover back
 /// if it is wanted and configd lost it (or an update changed the filter), and
 /// drops the hook if nothing needs it any more. Writes nothing when all is in place.
 pub fn boot() -> i32 {
     if !is_root() {
-        eprintln!("source-picker --boot: root only");
+        eprintln!("outpick --boot: root only");
         return 1;
     }
     if Path::new(WANTED).exists() {
@@ -299,18 +307,18 @@ pub fn boot() -> i32 {
             std::thread::sleep(std::time::Duration::from_secs(5));
         }
         if let Err(e) = last {
-            eprintln!("source-picker --boot: {e}");
+            eprintln!("outpick --boot: {e}");
         }
     }
     sync_hook();
     0
 }
 
-/// `source-picker --uninstall` (root): the Source key back to LG, the app off
+/// `outpick --uninstall` (root): the Source key back to LG, the app off
 /// the capture whitelist, the boot hook and every file but the settings gone.
 pub fn uninstall() -> i32 {
     if !is_root() {
-        eprintln!("source-picker --uninstall: run it as root");
+        eprintln!("outpick --uninstall: run it as root");
         return 1;
     }
     let mut errors = Vec::new();
@@ -337,14 +345,14 @@ pub fn uninstall() -> i32 {
     if errors.is_empty() { 0 } else { 1 }
 }
 
-/// `source-picker --takeover on|off|status` (as root over ssh, or from the app).
+/// `outpick --takeover on|off|status` (as root over ssh, or from the app).
 pub fn cli(arg: &str) -> i32 {
     let result = match arg {
         "on" => set(true),
         "off" | "restore" => set(false),
         "status" => Ok(()),
         _ => {
-            eprintln!("usage: source-picker --takeover on|off|status");
+            eprintln!("usage: outpick --takeover on|off|status");
             return 2;
         }
     };

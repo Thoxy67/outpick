@@ -53,7 +53,7 @@ jobs:
       - name: Package
         run: |
           python3 tools/package.py
-          ls -l target/armv7-unknown-linux-gnueabi/release/source-picker dist/
+          ls -l target/armv7-unknown-linux-gnueabi/release/outpick dist/
       - name: Package is reproducible (twice, same sha256)
         run: |
           git config --global --add safe.directory "$PWD"

@@ -1,4 +1,4 @@
-//! lg-c1-source: a modern, customizable native input picker for rooted LG webOS TVs.
+//! outpick: a modern, customizable native input picker for rooted LG webOS TVs.
 //!
 //! `--features webos` builds the TV app (SDL-webOS + GLES2 + luna-service2);
 //! the default build is a desktop preview with mock inputs for designing the UI.
@@ -55,7 +55,7 @@ fn main() {
         // Off the UI thread: a one-time move of an earlier build's key filter.
         std::thread::spawn(webos::takeover::migrate);
         if let Err(e) = webos::run() {
-            eprintln!("source-picker: {e}");
+            eprintln!("outpick: {e}");
             std::process::exit(1);
         }
     }

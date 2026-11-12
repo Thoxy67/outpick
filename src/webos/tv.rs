@@ -38,7 +38,7 @@ pub(crate) fn call(uri: &str, payload: &Value) -> Result<Value, String> {
 static PREVIEW_RETRY: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 /// Where live pictures land: tmpfs, not the eMMC.
-const LIVE_PATH: &str = "/tmp/lg-c1-source-live.bmp";
+const LIVE_PATH: &str = "/tmp/outpick-live.bmp";
 
 /// The newest live picture (source id, BMP bytes) not yet kept in the shared folder.
 static UNSAVED: std::sync::Mutex<Option<(String, Vec<u8>)>> = std::sync::Mutex::new(None);
@@ -360,7 +360,7 @@ fn foreground_of(v: &Value) -> Option<String> {
 /// The last session's inputs, storage, home and Source key owner, shown at once
 /// on the next start while the TV is asked again (stale-while-revalidate).
 /// tmpfs, so a reboot clears it.
-const CACHE_PATH: &str = "/tmp/lg-c1-source.state.json";
+const CACHE_PATH: &str = "/tmp/outpick.state.json";
 
 /// The TV's last answers, kept as they came for the cache (parsed again on load).
 #[derive(Default)]

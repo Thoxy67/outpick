@@ -490,14 +490,14 @@ pub fn mock_backend(repaint: impl Fn() + Send + 'static) -> Backend {
         while let Ok(cmd) = rx.recv() {
             match cmd {
                 Command::Launch(app, params) => {
-                    if std::env::var_os("LG_DEBUG").is_some() {
+                    if std::env::var_os("OUTPICK_DEBUG").is_some() {
                         eprintln!("launch {app} {params:?}");
                     }
                     s.lock().unwrap().foreground = Some(app)
                 }
                 Command::Takeover(on) => s.lock().unwrap().key_owner = if on { KeyOwner::Picker } else { KeyOwner::Lg },
                 Command::CaptureAccess(on) => s.lock().unwrap().capture_access = Some(on),
-                Command::Cec { app_id, key } if std::env::var_os("LG_DEBUG").is_some() => eprintln!("cec {app_id} {key:#x}"),
+                Command::Cec { app_id, key } if std::env::var_os("OUTPICK_DEBUG").is_some() => eprintln!("cec {app_id} {key:#x}"),
                 Command::Refresh | Command::Cec { .. } => {}
             }
             repaint();
