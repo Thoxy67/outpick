@@ -177,9 +177,9 @@ const SECTIONS: &[(&str, &[Item])] = &[
     ("section.appearance", &[Item::Theme, Item::Accent, Item::Corners, Item::Size, Item::ShowPanel, Item::Opacity, Item::Dim, Item::Animations]),
     ("section.layout", &[Item::Layout, Item::Position, Item::ShowIcons, Item::ShowHeader, Item::ShowHints]),
     ("section.content", &[Item::Naming, Item::ShowPreviews, Item::PreviewFps, Item::CaptureAccess, Item::ShowHome, Item::ShowDisconnected, Item::ShowDevices, Item::ShowLiveTv, Item::ShowUsb, Item::ShowMediaServers]),
-    ("section.behaviour", &[Item::AutoClose, Item::AutoSwitch]),
+    ("section.behaviour", &[Item::AutoClose]),
     ("section.clock", &[Item::ClockShow, Item::ClockStyle, Item::ClockSize, Item::Clock24h, Item::ClockSeconds, Item::ClockPlace]),
-    ("section.remote", &[Item::SourceKey, Item::MultikeyOpens, Item::RestoreLg]),
+    ("section.remote", &[Item::SourceKey, Item::AutoSwitch, Item::MultikeyOpens, Item::RestoreLg]),
     ("section.sources", &[Item::Sources, Item::Reset]),
 ];
 
@@ -276,6 +276,11 @@ pub struct App {
     sel: usize,
     picked_initial: bool,
     moved_since_open: bool,
+    /// Quick switch: Source pressed in the picker, so the highlighted input is
+    /// taken after `auto_switch_secs` unless another key comes first.
+    source_armed: bool,
+    /// How much of that countdown is left (1 → 0), for the bar under the selection.
+    switch_left: Option<(f32, u32)>,
     opened_at: Option<f64>,
     last_key: f64,
     closing: Option<f64>,
@@ -307,6 +312,8 @@ impl App {
             sel: 0,
             picked_initial: false,
             moved_since_open: false,
+            source_armed: false,
+            switch_left: None,
             opened_at: None,
             last_key: 0.0,
             closing: None,
@@ -510,15 +517,19 @@ impl App {
             }
         }
 
-        // Timers: auto switch (LG-style repeated Source presses) and auto close.
+        // Timers: quick switch (Source pressed again and again, as on LG's picker) and auto close.
+        self.switch_left = None;
         if self.screen == Screen::Picker && self.closing.is_none() {
             let idle = now - self.last_key;
-            if self.cfg.auto_switch_secs > 0 && self.moved_since_open {
-                let left = self.cfg.auto_switch_secs as f64 - idle;
+            if self.cfg.auto_switch_secs > 0 && self.source_armed {
+                let total = self.cfg.auto_switch_secs as f64;
+                let left = total - idle;
                 if left <= 0.0 {
+                    self.source_armed = false;
                     self.activate_selected(&st, now);
                 } else {
-                    ctx.request_repaint_after(std::time::Duration::from_secs_f64(left.min(1.0)));
+                    self.switch_left = Some(((left / total) as f32, left.ceil() as u32));
+                    ctx.request_repaint(); // the countdown bar moves every frame
                 }
             }
             if self.cfg.auto_close_secs > 0 && self.closing.is_none() {
@@ -622,6 +633,13 @@ impl App {
                     return;
                 }
             }
+            // With quick switch on, Source cycles the inputs only (never Customize)
+            // and the highlighted one is taken after the delay.
+            Nav::Source if self.cfg.auto_switch_secs > 0 => {
+                let m = self.visible_entries(st).len().max(1);
+                self.sel = (self.sel + 1) % m;
+                self.source_armed = true;
+            }
             Nav::Source => self.sel = (self.sel + 1) % n,
             Nav::Left if !list => self.sel = (self.sel + n - 1) % n,
             Nav::Right if !list => self.sel = (self.sel + 1) % n,
@@ -633,6 +651,10 @@ impl App {
             Nav::Ok => self.activate_selected(st, now),
             Nav::Back | Nav::Erase => self.close(now),
             _ => {}
+        }
+        if *k != Nav::Source {
+            // Any other key means the user is choosing: OK switches then.
+            self.source_armed = false;
         }
         if self.sel != old {
             self.moved_since_open = true;
@@ -972,12 +994,6 @@ impl App {
                 confirm_reset = false;
             }
             Nav::Left | Nav::Right | Nav::Ok if all[sel] == Item::SourceKey => self.toggle_takeover(),
-            // Buttons and pages do nothing with Left/Right.
-            Nav::Left | Nav::Right if matches!(row_kind_of(all[sel], &self.cfg), RowKind::Button | RowKind::Page) => {}
-            Nav::Left | Nav::Right => {
-                self.adjust(all[sel], if *k == Nav::Left { -1 } else { 1 });
-                self.retheme(ctx);
-            }
             Nav::Ok | Nav::Left | Nav::Right if all[sel] == Item::MultikeyOpens => {
                 self.adjust(Item::MultikeyOpens, 1);
                 // The root helper reads the keys from the saved config.
@@ -987,6 +1003,12 @@ impl App {
                 if !matches!(st.key_owner, KeyOwner::Unsupported) {
                     let _ = self.backend.commands.send(Command::Takeover(on));
                 }
+            }
+            // Buttons and pages do nothing with Left/Right.
+            Nav::Left | Nav::Right if matches!(row_kind_of(all[sel], &self.cfg), RowKind::Button | RowKind::Page) => {}
+            Nav::Left | Nav::Right => {
+                self.adjust(all[sel], if *k == Nav::Left { -1 } else { 1 });
+                self.retheme(ctx);
             }
             Nav::Ok if all[sel] == Item::ClockPlace => {
                 self.screen = Screen::ClockPlace { orig: self.cfg.clock };
@@ -1086,7 +1108,7 @@ impl App {
             Item::ShowUsb => c.show_usb = !c.show_usb,
             Item::ShowMediaServers => c.show_media_servers = !c.show_media_servers,
             Item::AutoClose => c.auto_close_secs = cycle(&[0, 5, 10, 15, 30, 60], c.auto_close_secs, dir),
-            Item::AutoSwitch => c.auto_switch_secs = cycle(&[0, 1, 2, 3, 5], c.auto_switch_secs, dir),
+            Item::AutoSwitch => c.auto_switch_secs = cycle(&[0, 1, 2, 3, 4, 5], c.auto_switch_secs, dir),
             Item::MultikeyOpens => c.multikey_opens = !c.multikey_opens,
             Item::Sources | Item::Reset | Item::SourceKey | Item::RestoreLg | Item::CaptureAccess => {}
         }
@@ -1494,6 +1516,26 @@ impl App {
             let pictured = entries.get(self.sel).is_some_and(|e| self.cfg.show_previews && self.preview_tex.contains_key(&e.source.id));
             clip.rect_filled(hl, r, veil(k.hover, alpha * if pictured { 0.25 } else { 1.0 }));
             clip.rect_stroke(hl.expand(5.0 * s), r + 5.0 * s, Stroke::new(3.0 * s, veil(k.accent, alpha)), StrokeKind::Outside);
+            // Quick switch countdown: a bar along the bottom of the selection that empties.
+            // and the seconds left in a pill at its top-left corner.
+            if let Some((f, secs)) = self.switch_left {
+                let track = Rect::from_min_max(pos2(hl.min.x + r, hl.max.y - 9.0 * s), pos2(hl.max.x - r, hl.max.y - 5.0 * s));
+                clip.rect_filled(track, 2.0 * s, veil(k.field_border, alpha));
+                clip.rect_filled(Rect::from_min_size(track.min, vec2(track.width() * f, track.height())), 2.0 * s, veil(k.accent, alpha));
+                let label = format!("{secs} s");
+                let font = semibold(17.0 * s);
+                let tw = text_width(&clip, &label, font.clone());
+                let size = vec2(tw + 20.0 * s, 26.0 * s);
+                // Top-left on a tile; in a list, at the right end (left of the ACTIF badge).
+                let pill = if vertical(self.cfg.layout) {
+                    let badge = if entries.get(self.sel).is_some_and(|e| e.current) { 120.0 * s } else { 0.0 };
+                    Align2::RIGHT_CENTER.anchor_size(pos2(hl.max.x - 18.0 * s - badge, hl.center().y), size)
+                } else {
+                    Rect::from_min_size(hl.min + vec2(10.0 * s, 10.0 * s), size)
+                };
+                clip.rect_filled(pill, 13.0 * s, veil(k.accent, alpha));
+                clip.text(pill.center(), Align2::CENTER_CENTER, label, font, veil(ink_on(k.accent), alpha));
+            }
         }
         for i in 0..n {
             let rect_i = place(cell(i));
@@ -1699,7 +1741,7 @@ impl App {
             Item::ShowUsb => ("usb", t("settings.show_usb"), onoff(c.show_usb)),
             Item::ShowMediaServers => ("server", t("settings.show_media_servers"), onoff(c.show_media_servers)),
             Item::AutoClose => ("timer", t("settings.auto_close"), secs(c.auto_close_secs, "value.never")),
-            Item::AutoSwitch => ("circle-check", t("settings.auto_switch"), secs(c.auto_switch_secs, "value.ok_only")),
+            Item::AutoSwitch => ("circle-check", t("settings.auto_switch"), secs(c.auto_switch_secs, "value.off")),
             Item::MultikeyOpens => ("menu", t("settings.multikey_opens"), onoff(c.multikey_opens)),
             Item::SourceKey => (
                 "tv",
