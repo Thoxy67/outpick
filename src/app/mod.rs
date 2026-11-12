@@ -128,6 +128,8 @@ pub struct App {
     /// The picker panel's last size as fractions of the screen, with its layout (for the
     /// position picker's preview).
     last_panel_frac: Option<(Layout, Vec2)>,
+    /// The last arrow while placing the clock, and when: a held arrow moves faster.
+    clock_last: Option<(Nav, f64)>,
 }
 
 impl App {
@@ -155,6 +157,7 @@ impl App {
             scroll: 0.0,
             grab_order: None,
             last_panel_frac: None,
+            clock_last: None,
             hits: Default::default(),
             last_click: f64::NEG_INFINITY,
             snap: true,
@@ -283,7 +286,7 @@ impl App {
                 Screen::Rename { .. } => self.rename_key(k),
                 Screen::Options { .. } => self.options_key(k, &st, now),
                 Screen::StylePick { .. } | Screen::PositionPick { .. } => self.pick_key(k, &ctx),
-                Screen::ClockPlace { .. } => self.clock_key(k),
+                Screen::ClockPlace { .. } => self.clock_key(k, now),
                 Screen::IconPick { .. } => self.icon_key(k, &st),
             }
             if self.closing.is_some() {

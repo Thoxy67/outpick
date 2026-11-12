@@ -23,15 +23,19 @@ pub(super) const POSITION_GRID: [Position; 9] = [
 ];
 
 impl App {
-    /// Placing the clock: the arrows move it (1 % of the screen a step), OK keeps, Back cancels.
-    pub(super) fn clock_key(&mut self, k: &Nav) {
+    /// Placing the clock: the arrows move it (1 % of the screen a step, 3 % while an arrow
+    /// is held: the same arrow again within 150 ms), OK keeps, Back cancels.
+    pub(super) fn clock_key(&mut self, k: &Nav, now: f64) {
         let Screen::ClockPlace { orig } = self.screen.clone() else { return };
+        let held = self.clock_last.as_ref().is_some_and(|(last, at)| last == k && now - at < 0.15);
+        self.clock_last = matches!(k, Nav::Left | Nav::Right | Nav::Up | Nav::Down).then(|| (k.clone(), now));
+        let (dx, dy) = if held { (0.03, 0.03) } else { (0.01, 0.015) };
         let c = &mut self.cfg.clock;
         match k {
-            Nav::Left => c.x = (c.x - 0.01).max(0.0),
-            Nav::Right => c.x = (c.x + 0.01).min(1.0),
-            Nav::Up => c.y = (c.y - 0.015).max(0.0),
-            Nav::Down => c.y = (c.y + 0.015).min(1.0),
+            Nav::Left => c.x = (c.x - dx).max(0.0),
+            Nav::Right => c.x = (c.x + dx).min(1.0),
+            Nav::Up => c.y = (c.y - dy).max(0.0),
+            Nav::Down => c.y = (c.y + dy).min(1.0),
             Nav::Ok => {
                 self.persist();
                 self.screen = Screen::Settings { sel: item_index(Item::ClockPlace), confirm_reset: false };
@@ -59,7 +63,9 @@ impl App {
         // Wide enough for the help line and every hint, so nothing leaves the bar.
         let help = p.layout_no_wrap(t("clock.place_help").to_string(), regular(17.0 * s), k.text_dim).size().x;
         let w = (self.footer_width(p, &hints, 1.0) + 56.0 * s).max(help + 64.0 * s).max(520.0 * s);
-        let bar = Rect::from_center_size(pos2(screen.center().x, screen.min.y + 70.0 * s), vec2(w.min(screen.width() - 32.0 * s), 110.0 * s));
+        // At the top, unless the clock is there: then at the bottom.
+        let bar_y = if c.y < 0.3 { screen.max.y - 70.0 * s } else { screen.min.y + 70.0 * s };
+        let bar = Rect::from_center_size(pos2(screen.center().x, bar_y), vec2(w.min(screen.width() - 32.0 * s), 110.0 * s));
         p.rect(bar, k.radius_lg * 2.0 * s, veil(k.card, 0.92 * alpha), Stroke::new(1.0, veil(k.card_border, alpha)), StrokeKind::Inside);
         p.text(pos2(bar.center().x, bar.min.y + 28.0 * s), Align2::CENTER_CENTER, t("clock.place_help"), regular(17.0 * s), veil(k.text_dim, alpha));
         self.footer(p, bar, &hints, alpha);
