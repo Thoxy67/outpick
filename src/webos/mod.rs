@@ -162,8 +162,9 @@ pub fn run() -> Result<(), String> {
                     keys.extend(nav);
                 }
                 Event::KeyUp { keycode: Some(Keycode::AcBack), .. } => {
-                    if held_back.take().is_some() {
-                        keys.push(Nav::Back);
+                    // A long Back (held 600 ms or more) closes from any screen.
+                    if let Some(down) = held_back.take() {
+                        keys.push(if down.elapsed() >= Duration::from_millis(600) { Nav::Exit } else { Nav::Back });
                     }
                 }
                 Event::TextInput { text, .. } if app.wants_text_input() => keys.push(Nav::Text(text)),

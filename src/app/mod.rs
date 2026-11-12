@@ -130,6 +130,10 @@ pub struct App {
     last_panel_frac: Option<(Layout, Vec2)>,
     /// The last arrow while placing the clock, and when: a held arrow moves faster.
     clock_last: Option<(Nav, f64)>,
+    /// Where the pointer was first reported since opening; it only hovers once it has
+    /// moved away from there (a Magic Remote at rest must not steal the selection).
+    pointer_origin: Option<Pos2>,
+    pointer_live: bool,
 }
 
 impl App {
@@ -158,6 +162,8 @@ impl App {
             grab_order: None,
             last_panel_frac: None,
             clock_last: None,
+            pointer_origin: None,
+            pointer_live: false,
             hits: Default::default(),
             last_click: f64::NEG_INFINITY,
             snap: true,
@@ -173,6 +179,8 @@ impl App {
         self.picked_initial = false;
         self.moved_since_open = false;
         self.armed_at = None;
+        self.pointer_origin = None;
+        self.pointer_live = false;
         self.opened_at = None;
         self.closing = None;
         let _ = self.backend.commands.send(Command::Refresh);
@@ -238,7 +246,16 @@ impl App {
         let mut translated: Vec<Nav> = Vec::with_capacity(keys.len());
         for k in keys {
             match k {
-                Nav::Pointer(pos) => translated.extend(self.hover(*pos)),
+                Nav::Pointer(pos) => {
+                    if !self.pointer_live {
+                        let origin = *self.pointer_origin.get_or_insert(*pos);
+                        if origin.distance(*pos) <= 12.0 {
+                            continue;
+                        }
+                        self.pointer_live = true;
+                    }
+                    translated.extend(self.hover(*pos))
+                }
                 // Placing the clock: a click puts it there.
                 Nav::Click(pos) if matches!(self.screen, Screen::ClockPlace { .. }) => {
                     let r = ui.max_rect();
@@ -246,6 +263,7 @@ impl App {
                     self.cfg.clock.y = ((pos.y - r.min.y) / r.height()).clamp(0.0, 1.0);
                 }
                 Nav::Click(pos) => {
+                    self.pointer_live = true;
                     self.last_click = now;
                     translated.extend(self.click(*pos));
                 }
