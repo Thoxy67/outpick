@@ -125,6 +125,9 @@ pub struct App {
     scroll: f32,
     /// The Sources editor's order when a row was grabbed: Back puts it back.
     grab_order: Option<Vec<String>>,
+    /// The picker panel's last size as fractions of the screen, with its layout (for the
+    /// position picker's preview).
+    last_panel_frac: Option<(Layout, Vec2)>,
 }
 
 impl App {
@@ -151,6 +154,7 @@ impl App {
             closing: None,
             scroll: 0.0,
             grab_order: None,
+            last_panel_frac: None,
             hits: Default::default(),
             last_click: f64::NEG_INFINITY,
             snap: true,

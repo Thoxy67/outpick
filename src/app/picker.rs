@@ -193,6 +193,7 @@ impl App {
         let want = vec2((content.x + pad * 2.0).max(min_w), head + content.y + foot + 8.0 * s);
         let rect = self.panel_rect(screen, want).translate(offset);
         self.panel(p, rect, alpha);
+        self.last_panel_frac = Some((self.cfg.layout, rect.size() / screen.size()));
 
         let target = entries.get(self.sel).filter(|_| self.switch_left.is_some());
         let subtitle = if let (Some(e), Some((_, secs))) = (target, self.switch_left) {
