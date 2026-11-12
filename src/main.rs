@@ -11,6 +11,9 @@ mod config;
 mod i18n;
 mod icons;
 mod model;
+// The TV's JSON answers: used by the TV build, tested on any.
+#[cfg_attr(not(feature = "webos"), allow(dead_code))]
+mod parse;
 // The root helpers' pure logic: used by the TV build, tested on any.
 #[cfg_attr(not(feature = "webos"), allow(dead_code))]
 mod rootside;

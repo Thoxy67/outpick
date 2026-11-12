@@ -4,7 +4,8 @@
 //! `home.js` do. LS2 calls go through Luma's FFI; `luna-send` is the fallback.
 
 use super::luna;
-use crate::model::{Backend, Command, KeyOwner, Preview, Shared, Source, SourceKind, decode_bmp, icon_from_tv};
+use crate::model::{Backend, Command, KeyOwner, Preview, Shared, Source, SourceKind, decode_bmp};
+use crate::parse::{foreground_of, parse_inputs, parse_storage};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::Instant;
@@ -233,103 +234,6 @@ fn wake_screen() {
     }
 }
 
-pub fn parse_inputs(v: &Value) -> Vec<Source> {
-    let mut out = Vec::new();
-    for d in v.get("devices").and_then(Value::as_array).into_iter().flatten() {
-        let s = |k: &str| d.get(k).and_then(Value::as_str).unwrap_or("").to_string();
-        let id = s("id");
-        let app_id = s("appId");
-        if id.is_empty() || app_id.is_empty() {
-            continue;
-        }
-        let kind = if id.starts_with("HDMI") { SourceKind::Hdmi } else { SourceKind::Analog };
-        let connected = d
-            .get("hdmiPlugIn")
-            .or_else(|| d.get("connected"))
-            .and_then(Value::as_bool)
-            .unwrap_or(true);
-        let label = Some(s("label")).filter(|l| !l.is_empty()).unwrap_or_else(|| id.replace('_', " "));
-        let sub = d.get("subList").and_then(Value::as_array).cloned().unwrap_or_default();
-        let entry = |kind: &str| sub.iter().find(|x| x.get("id").and_then(Value::as_str) == Some(kind)).cloned();
-        let cec = entry("SIMPLINK");
-        let urcu = entry("URCU");
-        let text = |v: &Option<Value>, k: &str| {
-            v.as_ref().and_then(|x| x.get(k)).and_then(Value::as_str).map(str::trim).filter(|t| !t.is_empty()).map(str::to_string)
-        };
-        // Model: the device's own CEC name. Maker: the universal-remote brand, else the CEC vendor id.
-        // Without a CEC name, the HDMI info frame's product, unless it is a chip
-        // maker's reference board ("Amlogic" / "MBox Meson Ref").
-        let chip = |v: &str| {
-            let v = v.to_ascii_lowercase();
-            ["amlogic", "realtek", "mediatek", "rockchip", "allwinner", "hisilicon", "broadcom", "mstar", "novatek"].iter().any(|c| v.contains(c))
-        };
-        let spd_vendor = Some(s("spdVendorName")).filter(|v| !v.trim().is_empty() && !chip(v));
-        let spd_product = Some(s("spdProductDescription"))
-            .filter(|p| !p.trim().is_empty() && !p.contains(" Ref") && !chip(p) && !p.to_ascii_lowercase().contains("meson"));
-        let device = text(&cec, "osdName").or_else(|| spd_product.clone());
-        let brand = text(&urcu, "brandName")
-            .or_else(|| cec.as_ref().and_then(|c| c.get("vendorId")).and_then(Value::as_u64).and_then(crate::model::cec_vendor).map(str::to_string))
-            .or(spd_vendor);
-        let signal = d.get("hdmiSignalExist").and_then(Value::as_bool);
-        let label_custom = d.get("modified").and_then(Value::as_bool).unwrap_or(false);
-        // The icon: HDMI-CEC first, then the info frame and LG's settings.
-        let hints = crate::model::DeviceHints {
-            cec_name: text(&cec, "osdName").unwrap_or_default(),
-            cec_vendor: cec.as_ref().and_then(|c| c.get("vendorId")).and_then(Value::as_u64),
-            cec_type: cec.as_ref().and_then(|c| c.get("cecpDevType")).and_then(Value::as_u64),
-            spd_vendor: s("spdVendorName"),
-            spd_product: s("spdProductDescription"),
-            spd_type: s("spdSourceDeviceInfo"),
-            lg_icon: s("icon"),
-            label: label.clone(),
-            remote_brand: text(&urcu, "brandName").unwrap_or_default(),
-            remote_service: text(&urcu, "serviceType").unwrap_or_default(),
-        };
-        let tv_icon = crate::model::detect_icon(&hints, kind);
-        out.push(Source { tv_icon, id, app_id, label, kind, connected, device, params: None, brand, label_custom, signal });
-    }
-    out
-}
-
-/// USB storage and DLNA servers, as LG's picker lists them
-/// (`InputPicker/Controllers/ConnectionsInterfaces/Interfaces.qml`), opened in
-/// the media player with `{"requestDevice": deviceId}`.
-pub fn parse_storage(v: &Value) -> Vec<Source> {
-    let mut out = Vec::new();
-    for d in v.get("devices").and_then(Value::as_array).into_iter().flatten() {
-        let s = |k: &str| d.get(k).and_then(Value::as_str).unwrap_or("").to_string();
-        let id = s("deviceId");
-        if id.is_empty() {
-            continue;
-        }
-        let (kind, prefix, device) = match s("deviceType").as_str() {
-            "usb" => {
-                let port = d.get("portNum").and_then(Value::as_u64).map(|p| if p < 0x10 { p } else { p / 0x10 });
-                let ejecting = matches!(s("deviceStatus").as_str(), "EJECTING" | "HIGHPRIORITY_EJECTING");
-                let detail = if ejecting { "ejecting".to_string() } else { port.map(|p| p.to_string()).unwrap_or_default() };
-                (SourceKind::Usb, "USB", Some(detail))
-            }
-            "dms" => (SourceKind::MediaServer, "DLNA", None),
-            _ => continue,
-        };
-        let name = Some(s("deviceName")).filter(|n| !n.trim().is_empty()).unwrap_or_else(|| prefix.to_string());
-        out.push(Source {
-            id: format!("{prefix}:{id}"),
-            app_id: "com.webos.app.mediadiscovery".into(),
-            label: name,
-            kind,
-            connected: true,
-            device,
-            tv_icon: icon_from_tv("", kind),
-            params: Some(json!({ "requestDevice": id })),
-            brand: None,
-            label_custom: false,
-            signal: None,
-        });
-    }
-    out
-}
-
 fn refresh(state: &Shared) {
     let result = call("luna://com.webos.service.eim/getAllInputStatus", &json!({}));
     let mut st = state.lock().unwrap();
@@ -343,18 +247,6 @@ fn refresh(state: &Shared) {
         Err(e) => st.error = Some(format!("Inputs: {e}")),
     }
     st.loaded = true;
-}
-
-fn foreground_of(v: &Value) -> Option<String> {
-    v.get("foregroundAppInfo")
-        .and_then(Value::as_array)
-        .and_then(|l| {
-            l.iter()
-                .filter_map(|a| a.get("appId").and_then(Value::as_str))
-                .find(|id| !id.is_empty() && *id != super::APP_ID)
-        })
-        .map(str::to_string)
-        .or_else(|| v.get("appId").and_then(Value::as_str).filter(|id| *id != super::APP_ID).map(str::to_string))
 }
 
 /// The last session's inputs, storage, home and Source key owner, shown at once
@@ -471,7 +363,7 @@ pub fn start(repaint: impl Fn() + Send + Sync + Clone + 'static) -> (Backend, Jo
                     &json!({"subscribe": true, "extraInfo": true}),
                     Duration::from_secs(3),
                     move |v| {
-                        if let Some(app) = foreground_of(&v) {
+                        if let Some(app) = foreground_of(&v, super::APP_ID) {
                             shared.lock().unwrap().foreground = Some(app);
                             repaint();
                         }
@@ -480,7 +372,7 @@ pub fn start(repaint: impl Fn() + Send + Sync + Clone + 'static) -> (Backend, Jo
                 if let Err(e) = sub {
                     eprintln!("foreground subscription: {e}");
                     if let Ok(v) = call("luna://com.webos.applicationManager/getForegroundAppInfo", &json!({"extraInfo": true})) {
-                        state.lock().unwrap().foreground = foreground_of(&v);
+                        state.lock().unwrap().foreground = foreground_of(&v, super::APP_ID);
                     }
                 }
             }
