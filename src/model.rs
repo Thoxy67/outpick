@@ -562,3 +562,107 @@ mod icon_tests {
         assert_eq!(icon_from_tv("hdmi_spc", SourceKind::Hdmi), SourceIcon::Cable);
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn hdmi(label: &str, device: Option<&str>, brand: Option<&str>) -> Source {
+        Source {
+            id: "HDMI_3".into(),
+            app_id: "com.webos.app.hdmi3".into(),
+            label: label.into(),
+            kind: SourceKind::Hdmi,
+            connected: true,
+            device: device.map(Into::into),
+            tv_icon: SourceIcon::Cable,
+            params: None,
+            brand: brand.map(Into::into),
+            label_custom: false,
+            signal: None,
+        }
+    }
+
+    #[test]
+    fn device_names() {
+        // A model takes its maker in front; a name without digits is the user's own.
+        assert_eq!(hdmi("HDMI 3", Some("AVC-S670H"), Some("Denon")).device_name(), "Denon AVC-S670H");
+        assert_eq!(hdmi("HDMI 1", Some("TV Thoxy"), Some("Mecool")).device_name(), "TV Thoxy");
+        assert_eq!(hdmi("HDMI 1", Some("Denon AVR-X1700H"), Some("denon")).device_name(), "Denon AVR-X1700H");
+        assert_eq!(hdmi("HDMI 1", Some(" PS5 "), None).device_name(), "PS5");
+        assert_eq!(hdmi("HDMI 1", None, Some("Sony")).device_name(), "Sony");
+        assert_eq!(hdmi("HDMI 1", Some(""), Some(" ")).device_name(), "HDMI 1");
+        // A label set in LG's settings wins.
+        let mut s = hdmi("Salon", Some("AVC-S670H"), Some("Denon"));
+        s.label_custom = true;
+        assert_eq!(s.device_name(), "Salon");
+    }
+
+    #[test]
+    fn brand_hint_and_port_name() {
+        let s = hdmi("HDMI 1", Some("TV Thoxy"), Some("Mecool"));
+        assert_eq!(s.brand_hint().as_deref(), Some("Mecool"));
+        assert_eq!(hdmi("HDMI 3", Some("AVC-S670H"), Some("Denon")).brand_hint(), None);
+        assert_eq!(hdmi("HDMI 3", Some("AVC-S670H"), Some("  ")).brand_hint(), None);
+        assert_eq!(hdmi("HDMI 3", None, None).brand_hint(), None);
+        assert_eq!(s.port_name(), "HDMI 3");
+        assert_eq!(Source::live_tv().port_name(), "LIVE TV");
+    }
+
+    /// A BMP with a 40-byte info header; `h` < 0 is top-down.
+    fn bmp(w: i32, h: i32, bpp: u16, rows: &[&[u8]]) -> Vec<u8> {
+        let data: Vec<u8> = rows.concat();
+        let mut b = Vec::new();
+        b.extend(b"BM");
+        b.extend((54 + data.len() as u32).to_le_bytes());
+        b.extend([0; 4]);
+        b.extend(54u32.to_le_bytes());
+        b.extend(40u32.to_le_bytes());
+        b.extend(w.to_le_bytes());
+        b.extend(h.to_le_bytes());
+        b.extend(1u16.to_le_bytes());
+        b.extend(bpp.to_le_bytes());
+        b.extend(0u32.to_le_bytes()); // BI_RGB
+        b.extend([0; 20]);
+        b.extend(data);
+        b
+    }
+
+    const RED: [u8; 4] = [255, 0, 0, 255];
+    const GREEN: [u8; 4] = [0, 255, 0, 255];
+    const BLUE: [u8; 4] = [0, 0, 255, 255];
+    const WHITE: [u8; 4] = [255, 255, 255, 255];
+
+    #[test]
+    fn bmp_24_bit_bottom_up() {
+        // Rows of 2 BGR pixels (6 bytes) padded to 8; the last row in the file is the top.
+        let bottom: &[u8] = &[255, 0, 0, 255, 255, 255, 0, 0]; // blue, white
+        let top: &[u8] = &[0, 0, 255, 0, 255, 0, 0, 0]; // red, green
+        let (w, h, px) = decode_bmp(&bmp(2, 2, 24, &[bottom, top])).unwrap();
+        assert_eq!((w, h), (2, 2));
+        assert_eq!(px, [RED, GREEN, BLUE, WHITE].concat());
+    }
+
+    #[test]
+    fn bmp_32_bit_top_down() {
+        let top: &[u8] = &[0, 0, 255, 0, 0, 255, 0, 0]; // red, green (BGRx)
+        let bottom: &[u8] = &[255, 0, 0, 0, 255, 255, 255, 0]; // blue, white
+        let (w, h, px) = decode_bmp(&bmp(2, -2, 32, &[top, bottom])).unwrap();
+        assert_eq!((w, h), (2, 2));
+        assert_eq!(px, [RED, GREEN, BLUE, WHITE].concat());
+    }
+
+    #[test]
+    fn bmp_bad_input_is_none() {
+        let good = bmp(2, 2, 24, &[&[0; 8], &[0; 8]]);
+        // The last row's padding may be missing, not its pixels.
+        for n in [0, 1, 2, 20, 29, 54, good.len() - 3] {
+            assert_eq!(decode_bmp(&good[..n]), None, "{n} bytes");
+        }
+        assert_eq!(decode_bmp(&bmp(2, 2, 8, &[&[0; 4], &[0; 4]])), None);
+        assert_eq!(decode_bmp(&bmp(0, 2, 24, &[])), None);
+        let mut not_bmp = good.clone();
+        not_bmp[0] = b'X';
+        assert_eq!(decode_bmp(&not_bmp), None);
+    }
+}
