@@ -67,7 +67,7 @@ impl App {
         let s = self.cfg.scale * zoom;
         let mut w = 0.0;
         for (key, label) in hints {
-            w += text_width(p, key, semibold(14.0 * s)).max(18.0 * s) + 16.0 * s;
+            w += text_width(p, key, semibold(15.0 * s)).max(18.0 * s) + 16.0 * s;
             w += 10.0 * s + text_width(p, label, regular(17.0 * s)) + 26.0 * s;
         }
         w - 26.0 * s
@@ -90,7 +90,7 @@ impl App {
         let mut x = rect.min.x + 28.0 * self.cfg.scale;
         let clip = p.with_clip_rect(rect.shrink(4.0));
         for (key, label) in &hints {
-            let kf = semibold(14.0 * s);
+            let kf = semibold(15.0 * s);
             let kw = text_width(p, key, kf.clone()).max(18.0 * s) + 16.0 * s;
             let cap = Rect::from_min_size(pos2(x, y), vec2(kw, 30.0 * s));
             let nav = if *key == t("key.ok") {
@@ -176,14 +176,26 @@ pub(super) fn text_width(p: &egui::Painter, text: &str, font: egui::FontId) -> f
     p.layout_no_wrap(text.to_string(), font, Color32::WHITE).size().x
 }
 
-/// `text` on one line if it fits, else split at a space onto two lines
-/// (the second shortened with an ellipsis if it still does not fit).
+/// `text` on one line if it fits, else split at a space onto two balanced lines
+/// (the second shortened with an ellipsis if no split fits).
 pub(super) fn two_lines(p: &egui::Painter, text: &str, font: egui::FontId, max: f32) -> Vec<String> {
     if text_width(p, text, font.clone()) <= max {
         return vec![text.to_string()];
     }
     let words: Vec<&str> = text.split_whitespace().collect();
-    // The longest first line that fits; the rest goes below.
+    // Among the cuts where both lines fit, the most balanced one (the shorter longest line).
+    let balanced = (1..words.len())
+        .map(|cut| (words[..cut].join(" "), words[cut..].join(" ")))
+        .map(|(a, b)| {
+            let w = text_width(p, &a, font.clone()).max(text_width(p, &b, font.clone()));
+            (w, a, b)
+        })
+        .filter(|(w, ..)| *w <= max)
+        .min_by(|x, y| x.0.total_cmp(&y.0));
+    if let Some((_, a, b)) = balanced {
+        return vec![a, b];
+    }
+    // Else the longest first line that fits; the rest goes below, shortened.
     for cut in (1..words.len()).rev() {
         let first = words[..cut].join(" ");
         if text_width(p, &first, font.clone()) <= max {

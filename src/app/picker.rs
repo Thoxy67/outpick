@@ -251,7 +251,7 @@ impl App {
             self.add_hit(rect_i.intersect(area), Hit::Tile(i));
         }
         if n > 0 {
-            let pictured = entries.get(self.sel).is_some_and(|e| self.cfg.show_previews && self.preview_tex.contains_key(&e.source.id));
+            let pictured = entries.get(self.sel).is_some_and(|e| self.pictured(e));
             clip.rect_filled(hl, r, veil(k.hover, alpha * if pictured { 0.25 } else { 1.0 }));
             clip.rect_stroke(hl.expand(5.0 * s), r + 5.0 * s, Stroke::new(3.0 * s, veil(k.accent, alpha)), StrokeKind::Outside);
             // Quick switch countdown: a bar along the bottom of the selection that empties.
@@ -284,7 +284,7 @@ impl App {
             let fade = if self.cfg.animations && !self.snap { 0.16 } else { 0.0 };
             let selected = ui.ctx().animate_bool_with_time(egui::Id::unique(("lg-source-tile", i)), i == self.sel, fade);
             match entries.get(i) {
-                Some(e) => self.draw_tile(ui, &clip, rect_i, e.icon.svg(), e, selected, alpha),
+                Some(e) => self.draw_tile(ui, &clip, rect_i, e.icon.svg(), e, selected, self.pictured(e), alpha),
                 None => {
                     let e = Entry {
                         source: Source::live_tv(),
@@ -294,7 +294,7 @@ impl App {
                         current: false,
                         hidden: false,
                     };
-                    self.draw_tile(ui, &clip, rect_i, "settings", &e, selected, alpha);
+                    self.draw_tile(ui, &clip, rect_i, "settings", &e, selected, false, alpha);
                 }
             }
         }
@@ -318,16 +318,31 @@ impl App {
         }
     }
 
+    /// Whether tile `e` shows its source's picture (the highlight and the text follow it).
+    fn pictured(&self, e: &Entry) -> bool {
+        self.cfg.show_previews && self.preview_tex.contains_key(&e.source.id)
+    }
+
     #[allow(clippy::too_many_arguments)]
-    fn draw_tile(&self, _ui: &Ui, p: &egui::Painter, rect: Rect, icon: &str, e: &Entry, selected: f32, alpha: f32) {
+    fn draw_tile(&self, _ui: &Ui, p: &egui::Painter, rect: Rect, icon: &str, e: &Entry, selected: f32, pictured: bool, alpha: f32) {
         let s = self.cfg.scale;
         let k = &self.t;
         let dimmed = !e.source.connected && !e.current;
-        let fg = mix(if dimmed { k.text_faint } else { k.text }, k.text, selected);
-        let icon_tint = mix(if dimmed { k.text_faint } else { k.icon }, k.accent_text, selected);
+        // Over a picture (shaded dark whatever the theme) the text is light, so a light
+        // theme's dark ink never sits on it.
+        let (fg, icon_tint, sub_c) = if pictured {
+            let white = |a: f32| Color32::from_white_alpha((a * 255.0) as u8);
+            let icon_sel = if k.dark { k.accent_text } else { white(0.85) };
+            (Color32::WHITE, mix(white(0.85), icon_sel, selected), white(0.72))
+        } else {
+            (
+                mix(if dimmed { k.text_faint } else { k.text }, k.text, selected),
+                mix(if dimmed { k.text_faint } else { k.icon }, k.accent_text, selected),
+                if dimmed { k.text_faint } else { k.text_dim },
+            )
+        };
         // The selected icon grows a little, eased in with the selection.
         let lift = 1.0 + 0.08 * selected;
-        let sub_c = if dimmed { k.text_faint } else { k.text_dim };
 
         if vertical(self.cfg.layout) {
             // The icon grows around a fixed centre; the label never moves.
@@ -352,28 +367,31 @@ impl App {
             return;
         }
 
-        // Icon, name and subtitle as one block, centred in the tile.
-        let isz = if self.cfg.show_icons { 60.0 * s } else { 0.0 };
-        let icon_size = isz * lift;
+        // Fixed anchors, so icons and names line up from tile to tile whatever each one holds:
+        // the icon centred at 36 % of the height, the first name line at 64 %, then a line
+        // further down the subtitle (or the name's second line).
+        let h = rect.height();
+        let has_icon = self.cfg.show_icons;
+        if has_icon {
+            let ir = Rect::from_center_size(pos2(rect.center().x, rect.min.y + 0.36 * h), Vec2::splat(60.0 * s * lift));
+            icons::paint(p, icon, ir, veil(icon_tint, alpha));
+        }
         let maxw = rect.width() - 28.0 * s;
         // A long name takes two lines rather than being cut.
         let name_font = semibold(22.0 * s);
+        let sub_font = regular(17.0 * s);
         let lines = two_lines(p, &e.name, name_font.clone(), maxw);
         let line_h = 26.0 * s;
-        let (gap1, name_h, gap2, sub_h) = (if isz > 0.0 { 16.0 * s } else { 0.0 }, line_h * lines.len() as f32, 4.0 * s, 20.0 * s);
-        let block = isz + gap1 + name_h + if e.sub.is_some() { gap2 + sub_h } else { 0.0 };
-        let top = rect.center().y - block / 2.0;
-        if isz > 0.0 {
-            let ir = Rect::from_center_size(pos2(rect.center().x, top + isz / 2.0), Vec2::splat(icon_size));
-            icons::paint(p, icon, ir, veil(icon_tint, alpha));
-        }
+        let first = rect.min.y + if has_icon { 0.64 * h } else { 0.44 * h };
         for (li, line) in lines.iter().enumerate() {
-            let ly = top + isz + gap1 + line_h * (li as f32 + 0.5);
-            p.text(pos2(rect.center().x, ly), Align2::CENTER_CENTER, line, name_font.clone(), veil(fg, alpha));
+            p.text(pos2(rect.center().x, first + line_h * li as f32), Align2::CENTER_CENTER, line, name_font.clone(), veil(fg, alpha));
         }
         if let Some(sub) = &e.sub {
-            let sy = top + isz + gap1 + name_h + gap2 + sub_h / 2.0;
-            p.text(pos2(rect.center().x, sy), Align2::CENTER_CENTER, fit(p, sub, regular(16.5 * s), maxw), regular(16.5 * s), veil(sub_c, alpha));
+            let sy = first + line_h * lines.len() as f32;
+            // Under a two-line name only if it still fits in the tile.
+            if sy + 11.0 * s <= rect.max.y - 6.0 * s {
+                p.text(pos2(rect.center().x, sy), Align2::CENTER_CENTER, fit(p, sub, sub_font.clone(), maxw), sub_font, veil(sub_c, alpha));
+            }
         }
         if e.current {
             self.badge(p, pos2(rect.max.x - 12.0 * s, rect.min.y + 12.0 * s), Align2::RIGHT_TOP, alpha);
@@ -384,7 +402,7 @@ impl App {
     fn badge(&self, p: &egui::Painter, at: Pos2, anchor: Align2, alpha: f32) {
         let s = self.cfg.scale;
         let k = &self.t;
-        let f = semibold(13.0 * s);
+        let f = semibold(15.0 * s);
         let label = t("picker.now");
         let w = text_width(p, label, f.clone()) + 30.0 * s;
         let r = anchor.anchor_size(at, vec2(w, 24.0 * s));

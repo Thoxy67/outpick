@@ -151,7 +151,7 @@ impl App {
             layout_glyph(p, glyph, *layout, veil(ink, alpha), (glyph.height() * 0.06).max(1.5));
             p.text(pos2(card.center().x, card.max.y - 34.0 * s), Align2::CENTER_CENTER, layout.label(), semibold(20.0 * s), veil(if i == sel { k.text } else { k.text_dim }, alpha));
             if current {
-                p.text(pos2(card.center().x, card.max.y - 12.0 * s), Align2::CENTER_CENTER, t("pick.current"), regular(14.0 * s), veil(k.accent_text, alpha));
+                p.text(pos2(card.center().x, card.max.y - 12.0 * s), Align2::CENTER_CENTER, t("pick.current"), regular(15.0 * s), veil(k.accent_text, alpha));
             }
         }
         let ring = Rect::from_min_size(pos2(hx, top), vec2(cw, ch)).expand(5.0 * s);
