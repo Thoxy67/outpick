@@ -64,6 +64,8 @@ hint.open = Open
 settings.reset_button = Reset
 settings.reset_confirm_button = Confirm
 settings.restore_button = Give back to LG
+pick.style_help = Pick how the inputs are laid out
+pick.current = Current
 key.ok = OK
 key.back = BACK
 

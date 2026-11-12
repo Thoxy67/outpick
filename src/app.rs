@@ -48,6 +48,7 @@ enum Hit {
     SettingNext(usize),
     SourceCell(usize, usize),
     OptionRow(usize),
+    PickCell(usize),
     /// A key hint chip: clicking it is pressing that key.
     Key(HintKey),
 }
@@ -75,6 +76,19 @@ const CEC_HOME: u32 = 0x0120_2001;
 const CEC_INFO: u32 = 0x0120_2002;
 const CEC_MENU: u32 = 0x0120_2006;
 
+/// The nine positions as they sit on the screen, row by row.
+const POSITION_GRID: [Position; 9] = [
+    Position::TopLeft,
+    Position::Top,
+    Position::TopRight,
+    Position::Left,
+    Position::Center,
+    Position::Right,
+    Position::BottomLeft,
+    Position::Bottom,
+    Position::BottomRight,
+];
+
 const OPTIONS: [OptAction; 7] = [
     OptAction::Switch,
     OptAction::Cec(CEC_POWER),
@@ -100,6 +114,10 @@ enum Screen {
     Rename { id: String, sel: usize, text: String, tv_name: String, from_options: bool },
     /// HDMI-CEC options of input `id` (opened with Down, or Right in a list).
     Options { id: String, sel: usize },
+    /// The four layouts as large cards; `sel` indexes `Layout::ALL`.
+    StylePick { sel: usize },
+    /// A screen in a 3×3 grid where the arrows move the panel; `sel` indexes `POSITION_GRID`.
+    PositionPick { sel: usize },
 }
 
 /// Columns of a Sources row.
@@ -462,6 +480,7 @@ impl App {
                 Screen::Sources { .. } => self.sources_key(k, &st),
                 Screen::Rename { .. } => self.rename_key(k),
                 Screen::Options { .. } => self.options_key(k, &st, now),
+                Screen::StylePick { .. } | Screen::PositionPick { .. } => self.pick_key(k, &ctx),
             }
             if self.closing.is_some() {
                 break;
@@ -518,6 +537,7 @@ impl App {
                 }
             }
             (Some(Hit::OptionRow(i)), Screen::Options { sel, .. }) => *sel = i,
+            (Some(Hit::PickCell(i)), Screen::StylePick { sel } | Screen::PositionPick { sel }) => *sel = i,
             (Some(Hit::SourceCell(r, c)), Screen::Sources { sel, col, grabbed }) if !*grabbed => {
                 *sel = r;
                 *col = c;
@@ -538,7 +558,7 @@ impl App {
             Some(Hit::Key(HintKey::Ok)) => vec![Nav::Ok],
             Some(Hit::Key(HintKey::Back)) => vec![Nav::Back],
             Some(Hit::Key(HintKey::Options)) => vec![self.options_key_nav()],
-            Some(Hit::OptionRow(_)) => vec![Nav::Ok],
+            Some(Hit::OptionRow(_) | Hit::PickCell(_)) => vec![Nav::Ok],
             Some(Hit::Panel) => Vec::new(),
             None => vec![Nav::Back],
         }
@@ -639,6 +659,162 @@ impl App {
         let shade = if live { 0.42 } else { 0.62 };
         p.rect_filled(rect, radius, Color32::from_black_alpha((shade * alpha * 255.0) as u8));
         true
+    }
+
+    /// Keys of the style and position pickers: arrows choose, OK keeps, Back cancels.
+    fn pick_key(&mut self, k: &Nav, ctx: &egui::Context) {
+        let back = |item| Screen::Settings { sel: item_index(item), confirm_reset: false };
+        match self.screen.clone() {
+            Screen::StylePick { mut sel } => {
+                let n = Layout::ALL.len();
+                match k {
+                    Nav::Left | Nav::Up => sel = (sel + n - 1) % n,
+                    Nav::Right | Nav::Down => sel = (sel + 1) % n,
+                    Nav::Ok => {
+                        self.cfg.layout = Layout::ALL[sel];
+                        self.retheme(ctx);
+                        self.persist();
+                        self.screen = back(Item::Layout);
+                        return;
+                    }
+                    Nav::Back | Nav::Erase | Nav::Source => {
+                        self.screen = back(Item::Layout);
+                        return;
+                    }
+                    _ => {}
+                }
+                self.screen = Screen::StylePick { sel };
+            }
+            Screen::PositionPick { mut sel } => {
+                // The arrows move across the screen, as the panel would.
+                let (r, c) = (sel / 3, sel % 3);
+                match k {
+                    Nav::Left if c > 0 => sel -= 1,
+                    Nav::Right if c < 2 => sel += 1,
+                    Nav::Up if r > 0 => sel -= 3,
+                    Nav::Down if r < 2 => sel += 3,
+                    Nav::Ok => {
+                        self.cfg.position = POSITION_GRID[sel];
+                        self.retheme(ctx);
+                        self.persist();
+                        self.screen = back(Item::Position);
+                        return;
+                    }
+                    Nav::Back | Nav::Erase | Nav::Source => {
+                        self.screen = back(Item::Position);
+                        return;
+                    }
+                    _ => {}
+                }
+                self.screen = Screen::PositionPick { sel };
+            }
+            _ => {}
+        }
+    }
+
+    /// A layout drawn in `r` (a small screen with its tiles), in `ink`.
+    fn layout_glyph(&self, p: &egui::Painter, r: Rect, layout: Layout, ink: Color32) {
+        let (w, h) = (r.width(), r.height());
+        let rad = (h * 0.06).max(1.5);
+        let b = |x0: f32, y0: f32, x1: f32, y1: f32| {
+            let rr = Rect::from_min_max(pos2(r.min.x + w * x0, r.min.y + h * y0), pos2(r.min.x + w * x1, r.min.y + h * y1));
+            p.rect_filled(rr, rad, ink);
+        };
+        match layout {
+            Layout::Row => (0..4).for_each(|t| b(0.1 + t as f32 * 0.21, 0.5, 0.27 + t as f32 * 0.21, 0.84)),
+            Layout::Grid => (0..6).for_each(|t| {
+                let (c, rw) = ((t % 3) as f32, (t / 3) as f32);
+                b(0.24 + c * 0.19, 0.24 + rw * 0.28, 0.38 + c * 0.19, 0.44 + rw * 0.28)
+            }),
+            Layout::List => (0..3).for_each(|t| b(0.34, 0.2 + t as f32 * 0.22, 0.66, 0.34 + t as f32 * 0.22)),
+            Layout::Sidebar => b(0.7, 0.12, 0.88, 0.88),
+        }
+    }
+
+    /// The panel's shape for the current layout, placed at `pos` inside `inner`.
+    fn panel_glyph_rect(&self, inner: Rect, pos: Position) -> Rect {
+        let (px, py) = match pos {
+            Position::TopLeft => (0.0, 0.0),
+            Position::Top => (0.5, 0.0),
+            Position::TopRight => (1.0, 0.0),
+            Position::Left => (0.0, 0.5),
+            Position::Center => (0.5, 0.5),
+            Position::Right => (1.0, 0.5),
+            Position::BottomLeft => (0.0, 1.0),
+            Position::Bottom => (0.5, 1.0),
+            Position::BottomRight => (1.0, 1.0),
+        };
+        let (pw, ph) = match self.cfg.layout {
+            Layout::Row => (0.62, 0.24),
+            Layout::Grid => (0.42, 0.42),
+            Layout::List => (0.26, 0.6),
+            Layout::Sidebar => (0.24, 0.84),
+        };
+        let size = vec2(inner.width() * pw, inner.height() * ph);
+        Rect::from_min_size(pos2(inner.min.x + (inner.width() - size.x) * px, inner.min.y + (inner.height() - size.y) * py), size)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn draw_style_pick(&mut self, ui: &Ui, p: &egui::Painter, screen: Rect, alpha: f32, sel: usize) {
+        let s = self.cfg.scale;
+        let k = self.t;
+        let (cw, ch, gap, pad) = (230.0 * s, 200.0 * s, 20.0 * s, 28.0 * s);
+        let n = Layout::ALL.len() as f32;
+        let size = vec2(n * cw + (n - 1.0) * gap + 2.0 * pad, 64.0 * s + ch + 92.0 * s);
+        // Always centred: the picker does not move while a style is chosen.
+        let rect = Rect::from_center_size(screen.center(), size.min(screen.size() - Vec2::splat(40.0 * s)));
+        self.panel(p, rect, alpha);
+        self.header(p, rect, t("settings.layout"), t("pick.style_help"), alpha);
+        let top = rect.min.y + 64.0 * s + 12.0 * s;
+        let hx = self.anim(ui, "pick-x", rect.min.x + pad + sel as f32 * (cw + gap), 0.14);
+        for (i, layout) in Layout::ALL.iter().enumerate() {
+            let card = Rect::from_min_size(pos2(rect.min.x + pad + i as f32 * (cw + gap), top), vec2(cw, ch));
+            self.add_hit(card, Hit::PickCell(i));
+            let current = *layout == self.cfg.layout;
+            p.rect(card, k.radius_lg * 1.4 * s, veil(k.field, alpha * 0.8), Stroke::new(1.0, veil(k.field_border, alpha)), StrokeKind::Inside);
+            let screen_r = Rect::from_min_size(pos2(card.min.x + 24.0 * s, card.min.y + 22.0 * s), vec2(cw - 48.0 * s, (cw - 48.0 * s) * 9.0 / 16.0));
+            p.rect(screen_r, 6.0 * s, veil(k.card, alpha), Stroke::new(2.0 * s, veil(k.text_dim, alpha)), StrokeKind::Inside);
+            let ink = if i == sel { k.accent } else { k.text_dim };
+            self.layout_glyph(p, screen_r.shrink(4.0 * s), *layout, veil(ink, alpha));
+            p.text(pos2(card.center().x, card.max.y - 34.0 * s), Align2::CENTER_CENTER, layout.label(), semibold(20.0 * s), veil(if i == sel { k.text } else { k.text_dim }, alpha));
+            if current {
+                p.text(pos2(card.center().x, card.max.y - 12.0 * s), Align2::CENTER_CENTER, t("pick.current"), regular(14.0 * s), veil(k.accent_text, alpha));
+            }
+        }
+        let ring = Rect::from_min_size(pos2(hx, top), vec2(cw, ch)).expand(5.0 * s);
+        p.rect_stroke(ring, k.radius_lg * 1.4 * s + 5.0 * s, Stroke::new(3.0 * s, veil(k.accent, alpha)), StrokeKind::Outside);
+        self.footer(p, rect, &[("◀ ▶", t("hint.choose")), (t("key.ok"), t("hint.save")), (t("key.back"), t("hint.cancel"))], alpha);
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn draw_position_pick(&mut self, ui: &Ui, p: &egui::Painter, screen: Rect, alpha: f32, sel: usize) {
+        let s = self.cfg.scale;
+        let k = self.t;
+        let pad = 28.0 * s;
+        let (sw, sh) = (560.0 * s, 315.0 * s);
+        let size = vec2(sw + 2.0 * pad, 64.0 * s + 12.0 * s + sh + 14.0 * s + 72.0 * s);
+        let rect = Rect::from_center_size(screen.center(), size.min(screen.size() - Vec2::splat(40.0 * s)));
+        self.panel(p, rect, alpha);
+        let name = POSITION_GRID[sel].label();
+        self.header(p, rect, t("settings.position"), name, alpha);
+        let mini = Rect::from_min_size(pos2(rect.min.x + pad, rect.min.y + 76.0 * s), vec2(sw, sh));
+        p.rect(mini, 10.0 * s, veil(mix(k.card, Color32::BLACK, 0.35), alpha), Stroke::new(2.0 * s, veil(k.text_dim, alpha)), StrokeKind::Inside);
+        let inner = mini.shrink(14.0 * s);
+        // The nine places, faint; each one is a pointer target too.
+        for (i, pos) in POSITION_GRID.iter().enumerate() {
+            let g = self.panel_glyph_rect(inner, *pos);
+            let cell = Rect::from_min_size(pos2(mini.min.x + (i % 3) as f32 * sw / 3.0, mini.min.y + (i / 3) as f32 * sh / 3.0), vec2(sw / 3.0, sh / 3.0));
+            self.add_hit(cell, Hit::PickCell(i));
+            if *pos == self.cfg.position && i != sel {
+                p.rect_stroke(g, 4.0 * s, Stroke::new(1.5 * s, veil(k.text_faint, alpha)), StrokeKind::Inside);
+            }
+        }
+        // The panel, gliding to the chosen place.
+        let target = self.panel_glyph_rect(inner, POSITION_GRID[sel]);
+        let at = Rect::from_min_size(pos2(self.anim(ui, "pos-x", target.min.x, 0.14), self.anim(ui, "pos-y", target.min.y, 0.14)), target.size());
+        p.rect(at, 5.0 * s, veil(k.accent_soft, alpha), Stroke::new(2.5 * s, veil(k.accent, alpha)), StrokeKind::Inside);
+        self.layout_glyph(p, at.shrink(3.0 * s), self.cfg.layout, veil(k.accent, alpha));
+        self.footer(p, rect, &[("◀ ▲ ▼ ▶", t("hint.move")), (t("key.ok"), t("hint.save")), (t("key.back"), t("hint.cancel"))], alpha);
     }
 
     /// The key that opens CEC options in this layout.
@@ -745,6 +921,16 @@ impl App {
                 if !matches!(st.key_owner, KeyOwner::Unsupported) {
                     let _ = self.backend.commands.send(Command::Takeover(on));
                 }
+            }
+            Nav::Ok if all[sel] == Item::Layout => {
+                let at = Layout::ALL.iter().position(|l| *l == self.cfg.layout).unwrap_or(0);
+                self.screen = Screen::StylePick { sel: at };
+                return;
+            }
+            Nav::Ok if all[sel] == Item::Position => {
+                let at = POSITION_GRID.iter().position(|p| *p == self.cfg.position).unwrap_or(7);
+                self.screen = Screen::PositionPick { sel: at };
+                return;
             }
             Nav::Ok if all[sel] == Item::CaptureAccess => {
                 let st = self.backend.state.lock().map(|s| s.clone()).unwrap_or_default();
@@ -988,6 +1174,8 @@ impl App {
             Screen::Sources { sel, col, grabbed } => self.draw_sources(ui, &p, st, screen, offset, alpha, sel, col, grabbed),
             Screen::Rename { text, tv_name, .. } => self.draw_rename(ui, &p, screen, offset, alpha, &text, &tv_name),
             Screen::Options { id, sel } => self.draw_options(ui, &p, st, screen, offset, alpha, &id, sel),
+            Screen::StylePick { sel } => self.draw_style_pick(ui, &p, screen, alpha, sel),
+            Screen::PositionPick { sel } => self.draw_position_pick(ui, &p, screen, alpha, sel),
         }
     }
 
@@ -1606,6 +1794,7 @@ impl App {
         let back = (t("key.back"), t("hint.done"));
         let choose = ("▲ ▼", t("hint.choose"));
         let hints: Vec<(&str, &str)> = match all.get(sel).map(|&it| (it, row_kind_of(it, &self.cfg))) {
+            Some((Item::Layout | Item::Position, RowKind::Choice)) => vec![choose, ("◀ ▶", t("hint.change")), (t("key.ok"), t("hint.open")), back],
             Some((_, RowKind::Choice)) => vec![choose, ("◀ ▶", t("hint.change")), back],
             Some((_, RowKind::Slider(..))) => vec![choose, ("◀ ▶", t("hint.adjust")), back],
             Some((_, RowKind::Toggle(_))) => vec![choose, (t("key.ok"), t("hint.toggle_onoff")), back],
