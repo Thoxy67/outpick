@@ -5,7 +5,7 @@
 
 use super::luna;
 use crate::model::{Backend, Command, KeyOwner, Preview, Shared, Source, SourceKind, decode_bmp};
-use crate::parse::{foreground_of, parse_inputs, parse_storage};
+use crate::parse::{foreground_of, parse_inputs, parse_storage, receiver_addresses};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::Instant;
@@ -293,6 +293,7 @@ fn load_cache(state: &Shared) {
     st.sources = parse_inputs(inputs);
     if let Some(storage) = v.get("storage").filter(|s| s.is_object()) {
         st.storage = parse_storage(storage);
+        st.receiver_hints = receiver_addresses(storage);
     }
     st.home = v.get("home").and_then(Value::as_str).map(Source::home);
     let detail = v.pointer("/keyOwner/1").and_then(Value::as_str).unwrap_or("").to_string();
@@ -318,6 +319,7 @@ pub fn start(repaint: impl Fn() + Send + Sync + Clone + 'static) -> (Backend, Jo
     // Shown at once: what the last session saw, while the TV is asked again.
     load_cache(&state);
     let (tx, rx) = mpsc::channel::<Command>();
+    let avr = crate::denon::start(state.clone(), repaint.clone());
 
     let repaint_for_preview = repaint.clone();
     let s = state.clone();
@@ -397,7 +399,11 @@ pub fn start(repaint: impl Fn() + Send + Sync + Clone + 'static) -> (Backend, Jo
                     Duration::from_secs(3),
                     move |v| {
                         if v.get("devices").is_some() {
-                            shared.lock().unwrap().storage = parse_storage(&v);
+                            {
+                                let mut st = shared.lock().unwrap();
+                                st.storage = parse_storage(&v);
+                                st.receiver_hints = receiver_addresses(&v);
+                            }
                             RAW.lock().unwrap().storage = Some(v);
                             repaint();
                         }
@@ -406,7 +412,10 @@ pub fn start(repaint: impl Fn() + Send + Sync + Clone + 'static) -> (Backend, Jo
                 if let Err(e) = sub {
                     eprintln!("storage subscription: {e}");
                     if let Ok(v) = call("luna://com.webos.service.attachedstoragemanager/listDevices", &json!({"deviceType": ["usb", "dms"]})) {
-                        state.lock().unwrap().storage = parse_storage(&v);
+                        let mut st = state.lock().unwrap();
+                        st.storage = parse_storage(&v);
+                        st.receiver_hints = receiver_addresses(&v);
+                        drop(st);
                         RAW.lock().unwrap().storage = Some(v);
                     }
                 }
@@ -446,6 +455,20 @@ pub fn start(repaint: impl Fn() + Send + Sync + Clone + 'static) -> (Backend, Jo
                             eprintln!("cec key {key:#x}: {e}");
                         }
                     }
+                    Command::AvrSelect { app_id, code } => {
+                        let front = s.lock().unwrap().foreground.clone();
+                        if let Some(app) = app_id.filter(|a| front.as_deref() != Some(a.as_str())) {
+                            let _ = call("luna://com.webos.applicationManager/launch", &json!({ "id": app }));
+                        }
+                        crate::denon::select(&s, &code);
+                    }
+                    Command::AvrKey { app_id, cmd } => {
+                        let front = s.lock().unwrap().foreground.clone();
+                        if let Some(app) = app_id.filter(|a| front.as_deref() != Some(a.as_str())) {
+                            let _ = call("luna://com.webos.applicationManager/launch", &json!({ "id": app }));
+                        }
+                        crate::denon::send(&s, &cmd);
+                    }
                     Command::Takeover(on) => {
                         {
                             let mut st = s.lock().unwrap();
@@ -479,5 +502,5 @@ pub fn start(repaint: impl Fn() + Send + Sync + Clone + 'static) -> (Backend, Jo
         let (st, fps, r) = (state.clone(), preview_fps.clone(), repaint_for_preview);
         let _ = std::thread::Builder::new().name("preview".into()).spawn(move || preview_loop(st, fps, r));
     }
-    (Backend { state, commands: tx, preview_fps }, worker)
+    (Backend { state, commands: tx, preview_fps, avr }, worker)
 }

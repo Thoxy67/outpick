@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<Device_Info>
+<DeviceInfoVers>0001</DeviceInfoVers>
+<CommApiVers>0301</CommApiVers>
+<Gen>0002</Gen>
+<BrandCode>0</BrandCode>
+<ProductCategory>01</ProductCategory>
+<CategoryName>AV RECEIVER</CategoryName>
+<ManualModelName>AVC-S670H</ManualModelName>
+<DeliveryCode>02</DeliveryCode>
+<ModelName>AVC-S670H</ModelName>
+<MacAddress>0006780A1B2C</MacAddress>
+<UpgradeVersion>00</UpgradeVersion>
+<ReloadDeviceInfo>0</ReloadDeviceInfo>
+<DeviceZones>1</DeviceZones>
+<DeviceCapabilities>
+<Menu>
+<lists>
+<ItemType>0</ItemType>
+<MenuName>Audio</MenuName>
+</lists>
+</Menu>
+</DeviceCapabilities>
+</Device_Info>

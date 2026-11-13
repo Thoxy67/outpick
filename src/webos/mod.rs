@@ -52,6 +52,37 @@ fn process_start_us() -> Option<u64> {
     Some(ticks * 1_000_000 / hz)
 }
 
+fn bytes(t: &str) -> String {
+    t.bytes().map(|b| b.to_string()).collect::<Vec<_>>().join(",")
+}
+
+/// One line per SDL event in /tmp/outpick-keys.log (key debugging on the TV).
+fn log_event(ev: &Event, text_active: bool) {
+    let line = match ev {
+        Event::KeyDown { keycode, scancode, repeat, .. } => {
+            format!("down key={} scan={} repeat={repeat}", keycode.map(i32::from).unwrap_or(-1), scancode.map(|s| s as i32).unwrap_or(-1))
+        }
+        Event::KeyUp { keycode, scancode, .. } => format!("up key={} scan={}", keycode.map(i32::from).unwrap_or(-1), scancode.map(|s| s as i32).unwrap_or(-1)),
+        // Bytes, not {:?}: the TV build has no Debug formatting.
+        Event::TextInput { text, .. } => format!("text {}", bytes(text)),
+        Event::TextEditing { text, .. } => format!("editing {}", bytes(text)),
+        Event::Window { win_event, .. } => format!("window {}", match win_event {
+            WindowEvent::FocusGained => "focus-gained",
+            WindowEvent::FocusLost => "focus-lost",
+            WindowEvent::Shown => "shown",
+            WindowEvent::Hidden => "hidden",
+            _ => "other",
+        }),
+        Event::MouseButtonDown { .. } => "click".into(),
+        Event::MouseMotion { .. } => return,
+        _ => "other".into(),
+    };
+    use std::io::Write;
+    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open("/tmp/outpick-keys.log") {
+        let _ = writeln!(f, "{line} text_active={text_active}");
+    }
+}
+
 pub fn run() -> Result<(), String> {
     trace("main entry");
     if std::env::var_os("APPID").is_none() {
@@ -133,21 +164,46 @@ pub fn run() -> Result<(), String> {
     let start = Instant::now();
     let mut next_paint = Instant::now();
     let mut held_back: Option<Instant> = None;
+    // OK held: since when, and whether its long press (the options) has fired yet. OK
+    // itself is sent on release, unless it was held or the Magic Remote clicked meanwhile.
+    let mut held_ok: Option<(Instant, bool)> = None;
+    let mut clicked_while_ok = false;
+    // LG's keyboard is up because we asked for it (to tell when it is closed by the user).
+    let mut keyboard_up = false;
+    // Key events traced to /tmp/outpick-keys.log while /tmp/outpick.keys exists.
+    let key_log = std::path::Path::new("/tmp/outpick.keys").exists();
     'main: loop {
         let mut keys = Vec::new();
-        let timeout = next_paint.saturating_duration_since(Instant::now()).min(Duration::from_millis(500));
+        let mut timeout = next_paint.saturating_duration_since(Instant::now()).min(Duration::from_millis(500));
+        if held_ok.is_some_and(|(_, fired)| !fired) {
+            timeout = timeout.min(Duration::from_millis(50)); // to fire the long press on time
+        }
         let mut first = sdl_events::wait(&mut pump, timeout.as_millis() as u32, true);
         while let Some(ev) = first.take().or_else(|| sdl_events::poll(&mut pump, true)) {
+            if key_log {
+                log_event(&ev, text_input.is_active());
+            }
+            let typing = app.wants_text_input();
             match ev {
                 Event::Quit { .. } => break 'main,
                 Event::Window { win_event: WindowEvent::Close, .. } => break 'main,
+                // Its key-up may never come: no long press fires, and the next OK is not lost.
+                Event::Window { win_event: WindowEvent::FocusLost, .. } => held_ok = None,
                 Event::KeyDown { keycode: Some(k), repeat, .. } => {
                     let nav = match k {
                         Keycode::Up => Some(Nav::Up),
                         Keycode::Down => Some(Nav::Down),
                         Keycode::Left => Some(Nav::Left),
                         Keycode::Right => Some(Nav::Right),
-                        Keycode::Return | Keycode::KpEnter | Keycode::Select => (!repeat).then_some(Nav::Ok),
+                        // In a text field, the keyboard's Enter validates at once.
+                        Keycode::Return | Keycode::KpEnter if typing => (!repeat && !keys.contains(&Nav::Ok)).then_some(Nav::Ok),
+                        Keycode::Return | Keycode::KpEnter | Keycode::Select => {
+                            if !repeat && held_ok.is_none() {
+                                held_ok = Some((Instant::now(), false));
+                                clicked_while_ok = false;
+                            }
+                            None
+                        }
                         Keycode::Backspace => Some(Nav::Erase),
                         // A further Source press while open (sent by our key filter).
                         Keycode::Tab => Some(Nav::Source),
@@ -161,19 +217,35 @@ pub fn run() -> Result<(), String> {
                     };
                     keys.extend(nav);
                 }
+                Event::KeyUp { keycode: Some(Keycode::Return | Keycode::KpEnter | Keycode::Select), .. } => {
+                    if let Some((_, fired)) = held_ok.take()
+                        && !fired
+                        && !clicked_while_ok
+                    {
+                        keys.push(Nav::Ok);
+                    }
+                }
                 Event::KeyUp { keycode: Some(Keycode::AcBack), .. } => {
                     // A long Back (held 600 ms or more) closes from any screen.
                     if let Some(down) = held_back.take() {
                         keys.push(if down.elapsed() >= Duration::from_millis(600) { Nav::Exit } else { Nav::Back });
                     }
                 }
-                Event::TextInput { text, .. } if app.wants_text_input() => keys.push(Nav::Text(text)),
+                // Enter may also come as text from the keyboard.
+                // (Once: it may come both as this key and as text in the same batch.)
+                Event::TextInput { text, .. } if typing && text.contains(['\n', '\r']) => {
+                    if !keys.contains(&Nav::Ok) {
+                        keys.push(Nav::Ok);
+                    }
+                }
+                Event::TextInput { text, .. } if typing => keys.push(Nav::Text(text)),
                 // The Magic Remote's pointer, in window pixels; egui works in points.
                 Event::MouseMotion { x, y, .. } => {
                     let ppp = (window.drawable_size().1 as f32 / 1080.0).max(0.25);
                     keys.push(Nav::Pointer(egui::pos2(x as f32, y as f32) / ppp));
                 }
                 Event::MouseButtonDown { mouse_btn: sdl2::mouse::MouseButton::Left, x, y, .. } => {
+                    clicked_while_ok = held_ok.is_some();
                     let ppp = (window.drawable_size().1 as f32 / 1080.0).max(0.25);
                     keys.push(Nav::Click(egui::pos2(x as f32, y as f32) / ppp));
                 }
@@ -182,11 +254,33 @@ pub fn run() -> Result<(), String> {
             }
             next_paint = Instant::now();
         }
+        // A long OK (held 600 ms) opens the selected source's options, while still held.
+        if let Some((down, fired)) = &mut held_ok
+            && !*fired
+            && down.elapsed() >= Duration::from_millis(600)
+        {
+            *fired = true;
+            keys.push(Nav::Menu);
+        }
 
-        // LG's on-screen keyboard follows SDL text input (SDL-webOS's OSK support).
+        // LG's on-screen keyboard follows SDL text input (SDL-webOS's OSK support). Closed by
+        // the user (its Back), it is not raised again: that is Back for the field.
         let typing = app.wants_text_input();
-        if typing != text_input.is_active() {
-            if typing { text_input.start() } else { text_input.stop() }
+        if typing && keyboard_up && !text_input.is_active() {
+            keyboard_up = false;
+            // Not when its Enter closed it: that validated the field already.
+            if !keys.contains(&Nav::Ok) {
+                keys.push(Nav::Back);
+            }
+        } else if typing && !text_input.is_active() {
+            held_ok = None; // the OK that opened the field must not become a long press in it
+            text_input.start();
+            keyboard_up = true;
+        } else if !typing {
+            if text_input.is_active() {
+                text_input.stop();
+            }
+            keyboard_up = false;
         }
         if Instant::now() < next_paint && keys.is_empty() {
             continue;

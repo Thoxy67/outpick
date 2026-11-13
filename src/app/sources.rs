@@ -218,6 +218,14 @@ impl App {
 
     #[allow(clippy::too_many_arguments)]
     pub(super) fn draw_rename(&mut self, ui: &Ui, p: &egui::Painter, screen: Rect, offset: Vec2, alpha: f32, text: &str, tv_name: &str) {
+        self.draw_text_field(ui, p, screen, offset, alpha, (t("rename.title"), tv_name), text, tv_name, t("rename.empty"));
+    }
+
+    /// A text field under a (title, subtitle) header, with what shows while it is empty and
+    /// a line of help under it.
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn draw_text_field(&mut self, ui: &Ui, p: &egui::Painter, screen: Rect, offset: Vec2, alpha: f32, head: (&str, &str), text: &str, placeholder: &str, help: &str) {
+        let tv_name = placeholder;
         let s = self.cfg.scale;
         let k = self.t;
         let pad = 28.0 * s;
@@ -226,7 +234,7 @@ impl App {
         let size = want.min(screen.size() - Vec2::splat(112.0 * s));
         let rect = Rect::from_min_size(pos2(screen.center().x - size.x / 2.0, screen.min.y + 90.0 * s), size).translate(offset);
         self.panel(p, rect, alpha);
-        self.header(p, rect, t("rename.title"), tv_name, alpha);
+        self.header(p, rect, head.0, head.1, alpha);
 
         let field = Rect::from_min_size(pos2(rect.min.x + pad, rect.min.y + 96.0 * s), vec2(rect.width() - pad * 2.0, 66.0 * s));
         p.rect(field, k.radius * 1.5 * s, veil(k.field, alpha), Stroke::new(2.0 * s, veil(k.accent, alpha)), StrokeKind::Inside);
@@ -245,7 +253,7 @@ impl App {
             p.rect_filled(Rect::from_center_size(pos2(caret_x, inner.center().y), vec2(2.5 * s, 32.0 * s)), 1.0, veil(k.accent, alpha));
         }
         ui.ctx().request_repaint_after(std::time::Duration::from_millis(500));
-        p.text(pos2(field.min.x, field.max.y + 20.0 * s), Align2::LEFT_TOP, t("rename.empty"), regular(17.0 * s), veil(k.text_dim, alpha));
+        p.text(pos2(field.min.x, field.max.y + 20.0 * s), Align2::LEFT_TOP, help, regular(17.0 * s), veil(k.text_dim, alpha));
         self.footer(p, rect, &[(t("key.ok"), t("hint.confirm")), (t("key.back"), t("hint.cancel"))], alpha);
     }
 

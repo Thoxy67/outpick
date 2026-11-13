@@ -8,6 +8,7 @@
 mod app;
 mod clock;
 mod config;
+mod denon;
 mod i18n;
 mod icons;
 mod model;
@@ -42,6 +43,11 @@ fn main() {
         }
         if let Some(i) = args.iter().position(|a| a == "--capture-access") {
             std::process::exit(webos::capture::cli(args.get(i + 1).map(String::as_str).unwrap_or("status")));
+        }
+        if args.iter().any(|a| a == "--avr-scan") {
+            // Diagnostics over ssh: what the receiver search finds from here.
+            denon::scan_report();
+            return;
         }
         if args.iter().any(|a| a == "--boot") {
             std::process::exit(webos::takeover::boot());

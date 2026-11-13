@@ -267,6 +267,8 @@ pub struct Config {
     pub order: Vec<String>,
     pub sources: Vec<SourceOverride>,
     pub clock: ClockConfig,
+    /// The Denon/Marantz receiver on the network.
+    pub avr: crate::denon::AvrConfig,
 }
 
 impl Default for Config {
@@ -304,6 +306,7 @@ impl Default for Config {
             order: Vec::new(),
             sources: Vec::new(),
             clock: ClockConfig::default(),
+            avr: crate::denon::AvrConfig::default(),
         }
     }
 }
@@ -467,6 +470,7 @@ fn lenient<T: DeserializeOwned>(user: Map<String, Value>, path: &str) -> Value {
     for (k, v) in user {
         let v = match (path, k.as_str(), v) {
             ("", "clock", Value::Object(m)) => lenient::<ClockConfig>(m, "clock."),
+            ("", "avr", Value::Object(m)) => lenient::<crate::denon::AvrConfig>(m, "avr."),
             ("", "order", Value::Array(a)) => elements::<String>(a, "order"),
             ("", "sources", Value::Array(a)) => elements::<SourceOverride>(a, "sources"),
             (_, _, v) => v,

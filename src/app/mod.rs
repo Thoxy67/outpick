@@ -6,6 +6,7 @@
 //! which a TV remote has no Tab key for. Everything is painted from `Tokens`,
 //! and every string comes from `locales/*.lang` through `i18n`.
 
+mod avr;
 mod entries;
 mod options;
 mod picker;
@@ -15,7 +16,7 @@ mod sources;
 mod widgets;
 
 use crate::config::{Config, Layout, Position};
-use crate::i18n;
+use crate::i18n::{self, t};
 use crate::icons;
 use crate::model::{Backend, Command, TvState};
 use crate::theme::{self, Tokens};
@@ -35,6 +36,8 @@ pub enum Nav {
     Source,
     /// Long Back / Exit: close from anywhere.
     Exit,
+    /// Long OK: the selected source's options, in every layout.
+    Menu,
     /// Typed text (on-screen keyboard or a real keyboard), while renaming.
     Text(String),
     /// Backspace while renaming; Back elsewhere.
@@ -93,6 +96,14 @@ enum Screen {
     StylePick { sel: usize },
     /// Choosing source `id`'s icon in a grid; `sel` indexes `SourceIcon::ALL`.
     IconPick { id: String, sel: usize },
+    /// The receivers found on the network, Automatic and "type an address"; `sel` indexes
+    /// them. `back`: the input whose options opened it (None: Customize).
+    AvrPick { sel: usize, back: Option<String> },
+    /// Typing the receiver's address (`back` as for AvrPick).
+    IpEntry { text: String, back: Option<String>, bad: bool },
+    /// The receiver's setup menu is open on screen (through input `id`): the arrows, OK
+    /// and Back go to it.
+    AvrRemote { id: String },
     /// A screen in a 3×3 grid where the arrows move the panel; `sel` indexes `POSITION_GRID`.
     PositionPick { sel: usize },
     /// Moving the clock over the whole screen (the interface shown faded); `orig` is restored on Back.
@@ -137,6 +148,17 @@ pub struct App {
     /// moved away from there (a Magic Remote at rest must not steal the selection).
     pointer_origin: Option<Pos2>,
     pointer_live: bool,
+    /// The receiver settings last handed to its worker.
+    sent_avr: crate::denon::AvrConfig,
+    /// A sound mode just asked for (`denon::SOUND_MODES` index) and when: shown until the
+    /// receiver reports it (or a few seconds pass).
+    sound_pending: Option<(usize, f64)>,
+    /// The last sound mode asked for: where Left/Right go on from when the receiver reports a
+    /// mode outside the groups (Dolby Digital, DTS…).
+    sound_asked: Option<usize>,
+    /// The options row the keys last selected, as an action: rows come and go under it (the
+    /// receiver turning on adds the sound row), and the selection stays on what it was.
+    opt_sel: Option<options::OptAction>,
 }
 
 impl App {
@@ -147,7 +169,12 @@ impl App {
         i18n::select(cfg.language);
         let t = tokens(&cfg);
         theme::apply(ctx, &t);
+        backend.avr.configure(cfg.avr.clone());
         App {
+            sent_avr: cfg.avr.clone(),
+            sound_pending: None,
+            sound_asked: None,
+            opt_sel: None,
             saved: cfg.clone(),
             cfg,
             t,
@@ -197,7 +224,7 @@ impl App {
 
     /// Whether a text field is open: the runner shows the on-screen keyboard.
     pub fn wants_text_input(&self) -> bool {
-        matches!(self.screen, Screen::Rename { .. }) && self.closing.is_none()
+        matches!(self.screen, Screen::Rename { .. } | Screen::IpEntry { .. }) && self.closing.is_none()
     }
 
     fn retheme(&mut self, ctx: &egui::Context) {
@@ -296,6 +323,11 @@ impl App {
         };
         for k in &translated {
             if *k == Nav::Exit {
+                // Leaving with the receiver's menu open: close it too.
+                if matches!(self.screen, Screen::AvrRemote { .. }) {
+                    let cmd = crate::denon::MENU_OFF.to_string();
+                    let _ = self.backend.commands.send(Command::AvrKey { app_id: None, cmd });
+                }
                 self.close(now);
                 break;
             }
@@ -309,12 +341,19 @@ impl App {
                 Screen::StylePick { .. } | Screen::PositionPick { .. } => self.pick_key(k, &ctx),
                 Screen::ClockPlace { .. } => self.clock_key(k, now),
                 Screen::IconPick { .. } => self.icon_key(k, &st),
+                Screen::AvrPick { .. } => self.avr_pick_key(k, &st),
+                Screen::IpEntry { .. } => self.ip_key(k),
+                Screen::AvrRemote { .. } => self.avr_remote_key(k),
             }
             if self.closing.is_some() {
                 break;
             }
         }
         refresh(self, &mut entries, &mut built_for);
+        if self.cfg.avr != self.sent_avr {
+            self.sent_avr = self.cfg.avr.clone();
+            self.backend.avr.configure(self.sent_avr.clone());
+        }
 
         // Timers: quick switch (Source pressed again and again, as on LG's picker) and auto close.
         self.switch_left = None;
@@ -371,7 +410,11 @@ impl App {
 
     /// Hovering moves the selection there; nothing is pressed.
     fn hover(&mut self, pos: Pos2) -> Vec<Nav> {
-        match (self.hit_at(pos), &mut self.screen) {
+        let hit = self.hit_at(pos);
+        if matches!(hit, Some(Hit::OptionRow(_))) && matches!(self.screen, Screen::Options { .. }) {
+            self.opt_sel = None; // the pointer picks a row by its place
+        }
+        match (hit, &mut self.screen) {
             (Some(Hit::Tile(i)), Screen::Picker) => {
                 if self.sel != i {
                     self.sel = i;
@@ -387,7 +430,7 @@ impl App {
                     *confirm_reset = false;
                 }
             }
-            (Some(Hit::OptionRow(i)), Screen::Options { sel, .. }) => *sel = i,
+            (Some(Hit::OptionRow(i)), Screen::Options { sel, .. } | Screen::AvrPick { sel, .. }) => *sel = i,
             (Some(Hit::PickCell(i)), Screen::StylePick { sel } | Screen::PositionPick { sel } | Screen::IconPick { sel, .. }) => *sel = i,
             (Some(Hit::SourceCell(r, c)), Screen::Sources { sel, col, grabbed }) if !*grabbed => {
                 *sel = r;
@@ -408,7 +451,7 @@ impl App {
             Some(Hit::SettingNext(_)) => vec![Nav::Right],
             Some(Hit::Key(HintKey::Ok)) => vec![Nav::Ok],
             Some(Hit::Key(HintKey::Back)) => vec![Nav::Back],
-            Some(Hit::Key(HintKey::Options)) => vec![self.options_key_nav()],
+            Some(Hit::Key(HintKey::Options)) => vec![Nav::Menu],
             Some(Hit::OptionRow(_) | Hit::PickCell(_)) => vec![Nav::Ok],
             Some(Hit::Panel) => Vec::new(),
             None => vec![Nav::Back],
@@ -427,8 +470,9 @@ impl App {
         let s = self.cfg.scale;
         let p = ui.painter().clone();
 
-        // Backdrop: darken toward the panel, so the picture stays visible elsewhere.
-        if self.cfg.dim > 0.0 {
+        // Backdrop: darken toward the panel, so the picture stays visible elsewhere (not
+        // over the receiver's own menu).
+        if self.cfg.dim > 0.0 && !matches!(self.screen, Screen::AvrRemote { .. }) {
             let dark = Color32::from_black_alpha((self.cfg.dim * alpha * 255.0) as u8);
             let clear = Color32::TRANSPARENT;
             match self.docked_left() {
@@ -490,6 +534,13 @@ impl App {
             Screen::PositionPick { sel } => self.draw_position_pick(ui, &p, screen, alpha, sel),
             Screen::ClockPlace { .. } => self.draw_clock_place(ui, &p, st, entries, screen, alpha),
             Screen::IconPick { id, sel } => self.draw_icon_pick(ui, &p, st, screen, alpha, &id, sel),
+            Screen::AvrPick { sel, .. } => self.draw_avr_pick(&p, st, screen, offset, alpha, sel),
+            Screen::AvrRemote { .. } => self.draw_avr_remote(&p, st, screen, alpha),
+            Screen::IpEntry { text, bad, .. } => {
+                // OK on something that is not an address says so where the help was.
+                let help = if bad { t("avr.ip_bad") } else { t("avr.ip_help") };
+                self.draw_text_field(ui, &p, screen, offset, alpha, (t("avr.ip_title"), ""), &text, "192.168.1.20", help)
+            }
         }
         // The clock, over everything but its own placing screen.
         if self.cfg.clock.show && !matches!(self.screen, Screen::ClockPlace { .. }) {

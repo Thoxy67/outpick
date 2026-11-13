@@ -384,6 +384,10 @@ pub struct TvState {
     pub preview_supported: Option<bool>,
     /// webOS 6 capture whitelist: Some(true) listed, Some(false) not, None not needed.
     pub capture_access: Option<bool>,
+    /// The Denon/Marantz receiver on the network, if any.
+    pub avr: crate::denon::AvrState,
+    /// Addresses of Denon/Marantz receivers the TV already knows (their media servers).
+    pub receiver_hints: Vec<String>,
 }
 
 pub type Shared = Arc<Mutex<TvState>>;
@@ -400,6 +404,12 @@ pub enum Command {
     Cec { app_id: String, key: u32 },
     /// Adds this app to (true) or removes it from (false) the webOS 6 capture whitelist.
     CaptureAccess(bool),
+    /// Shows input `app_id` (the receiver's HDMI input; None for TV Audio, the TV's own
+    /// sound) and selects input `code` on the receiver, turning it on first if needed.
+    AvrSelect { app_id: Option<String>, code: String },
+    /// Sends raw command `cmd` to the receiver (its setup menu's keys), first showing
+    /// input `app_id` when given (where the receiver's menu appears).
+    AvrKey { app_id: Option<String>, cmd: String },
 }
 
 /// A TV (or a mock): fills `Shared` from a worker thread and takes commands.
@@ -408,6 +418,8 @@ pub struct Backend {
     pub commands: mpsc::Sender<Command>,
     /// Live preview rate the UI wants (pictures per second, 0 = off).
     pub preview_fps: Arc<AtomicU32>,
+    /// The receiver's worker (it waits for the settings from the UI).
+    pub avr: crate::denon::Handle,
 }
 
 impl Backend {
@@ -418,9 +430,11 @@ impl Backend {
 
 /// Mock inputs for the desktop preview, shaped like the C1's.
 #[cfg(not(feature = "webos"))]
-pub fn mock_backend(repaint: impl Fn() + Send + 'static) -> Backend {
+pub fn mock_backend(repaint: impl Fn() + Send + Clone + 'static) -> Backend {
     let state: Shared = Arc::default();
     let (tx, rx) = mpsc::channel::<Command>();
+    // The receiver is a real one: the desktop preview talks to the network too.
+    let avr = crate::denon::start(state.clone(), repaint.clone());
     let s = state.clone();
     std::thread::spawn(move || {
         let src = |n: u8, label: &str, connected: bool, device: Option<&str>, icon: SourceIcon| Source {
@@ -513,12 +527,24 @@ pub fn mock_backend(repaint: impl Fn() + Send + 'static) -> Backend {
                 Command::Takeover(on) => s.lock().unwrap().key_owner = if on { KeyOwner::Picker } else { KeyOwner::Lg },
                 Command::CaptureAccess(on) => s.lock().unwrap().capture_access = Some(on),
                 Command::Cec { app_id, key } if std::env::var_os("OUTPICK_DEBUG").is_some() => eprintln!("cec {app_id} {key:#x}"),
+                Command::AvrSelect { app_id, code } => {
+                    if let Some(app) = app_id {
+                        s.lock().unwrap().foreground = Some(app);
+                    }
+                    crate::denon::select(&s, &code);
+                }
+                Command::AvrKey { app_id, cmd } => {
+                    if let Some(app) = app_id {
+                        s.lock().unwrap().foreground = Some(app);
+                    }
+                    crate::denon::send(&s, &cmd);
+                }
                 Command::Refresh | Command::Cec { .. } => {}
             }
             repaint();
         }
     });
-    Backend { state, commands: tx, preview_fps: Arc::new(AtomicU32::new(0)) }
+    Backend { state, commands: tx, preview_fps: Arc::new(AtomicU32::new(0)), avr }
 }
 
 #[cfg(test)]

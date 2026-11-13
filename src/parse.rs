@@ -110,6 +110,21 @@ pub fn parse_storage(v: &Value) -> Vec<Source> {
     out
 }
 
+/// The addresses of the Denon and Marantz receivers among the media servers the TV sees
+/// (their HEOS media server): where to look for them when SSDP gets no answer.
+pub fn receiver_addresses(v: &Value) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for d in v.get("devices").and_then(Value::as_array).into_iter().flatten() {
+        let s = |k: &str| d.get(k).and_then(Value::as_str).unwrap_or("").to_ascii_lowercase();
+        let maker = format!("{} {}", s("manufacturer"), s("deviceName"));
+        let ip = d.get("ipAddress").and_then(Value::as_str).unwrap_or("").trim();
+        if (maker.contains("denon") || maker.contains("marantz")) && ip.parse::<std::net::Ipv4Addr>().is_ok() && !out.iter().any(|o| o == ip) {
+            out.push(ip.to_string());
+        }
+    }
+    out
+}
+
 /// The app in front, other than `own` (the picker itself): the card (a full-screen app)
 /// when there is one, as overlays such as the screen saver are listed too, else the first.
 pub fn foreground_of(v: &Value, own: &str) -> Option<String> {
@@ -199,6 +214,16 @@ mod tests {
                 ("DLNA:5238d0e8-aebc-3102-a0ee-cb00731d79ce", "Freebox Server"),
             ]
         );
+        // Both receivers, by their media server (the capture's addresses are all 192.0.2.10).
+        assert_eq!(receiver_addresses(&fixture("c1-listDevices.json")), ["192.0.2.10"]);
+        let v = json!({"devices": [
+            {"manufacturer": "Denon", "ipAddress": "192.168.1.70"},
+            {"manufacturer": "DENON", "ipAddress": "192.168.1.58"},
+            {"deviceName": "Marantz SR6015", "ipAddress": "192.168.1.60"},
+            {"manufacturer": "Freebox SAS", "ipAddress": "192.168.1.254"},
+            {"manufacturer": "Denon", "ipAddress": "nope"}
+        ]});
+        assert_eq!(receiver_addresses(&v), ["192.168.1.70", "192.168.1.58", "192.168.1.60"]);
         for m in &s {
             assert_eq!(m.kind, SourceKind::MediaServer);
             assert_eq!(m.app_id, "com.webos.app.mediadiscovery");

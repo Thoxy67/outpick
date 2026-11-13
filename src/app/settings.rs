@@ -51,6 +51,9 @@ pub(super) enum Item {
     MultikeyOpens,
     Sources,
     Reset,
+    AvrEnabled,
+    AvrDevice,
+    AvrProtocol,
 }
 
 /// Customize's sections, as the root page lists them: (title key, icon, its options).
@@ -65,6 +68,7 @@ const PAGES: &[(&str, &str, &[Item])] = &[
     ("section.previews", "monitor", &[Item::ShowPreviews, Item::PreviewFps, Item::CaptureAccess]),
     ("section.clock", "timer", &[Item::ClockShow, Item::ClockStyle, Item::ClockSize, Item::Clock24h, Item::ClockSeconds, Item::ClockPlace]),
     ("section.remote", "tv", &[Item::SourceKey, Item::MultikeyOpens, Item::SwitchDelay, Item::AutoClose]),
+    ("section.avr", "speaker", &[Item::AvrEnabled, Item::AvrDevice, Item::AvrProtocol]),
     ("section.general", "settings", &[Item::Language, Item::ShowCustomizeTile, Item::Reset]),
 ];
 
@@ -79,6 +83,7 @@ fn visible(item: Item, cfg: &Config, st: &TvState) -> bool {
         // Only where capture needs allowing: not when it already works without it.
         Item::CaptureAccess => st.capture_access.is_some() && !(st.capture_access == Some(false) && st.preview_supported == Some(true)),
         Item::ClockStyle | Item::ClockSize | Item::Clock24h | Item::ClockSeconds | Item::ClockPlace => cfg.clock.show,
+        Item::AvrDevice | Item::AvrProtocol => cfg.avr.enabled,
         _ => true,
     }
 }
@@ -124,8 +129,9 @@ fn row_kind_of(item: Item) -> RowKind {
         | Item::ShowDevices
         | Item::ShowLiveTv
         | Item::ShowUsb
-        | Item::ShowMediaServers => RowKind::Toggle,
-        Item::ClockPlace | Item::Sources => RowKind::Page,
+        | Item::ShowMediaServers
+        | Item::AvrEnabled => RowKind::Toggle,
+        Item::ClockPlace | Item::Sources | Item::AvrDevice => RowKind::Page,
         Item::Reset => RowKind::Button,
         _ => RowKind::Choice,
     }
@@ -239,6 +245,11 @@ impl App {
                     self.screen = Screen::Sources { sel: 0, col: COL_SHOW, grabbed: false };
                     return;
                 }
+                Item::AvrDevice => {
+                    self.backend.avr.search();
+                    self.screen = Screen::AvrPick { sel: self.avr_pick_current(st).unwrap_or(0), back: None };
+                    return;
+                }
                 // Right only opens pages.
                 _ if *k == Nav::Right => {}
                 Item::Layout => {
@@ -268,6 +279,7 @@ impl App {
                         language: c.language,
                         source_key_opens: c.source_key_opens,
                         multikey_opens: c.multikey_opens,
+                        avr: c.avr.clone(),
                         show_customize_tile: c.show_customize_tile,
                         ..Config::default()
                     };
@@ -341,6 +353,7 @@ impl App {
             Item::ShowLiveTv => (c.show_live_tv, true),
             Item::ShowUsb => (c.show_usb, true),
             Item::ShowMediaServers => (c.show_media_servers, true),
+            Item::AvrEnabled => (c.avr.enabled, true),
             _ => (false, false),
         }
     }
@@ -378,10 +391,12 @@ impl App {
             Item::ShowHome => c.show_home = !c.show_home,
             Item::ShowUsb => c.show_usb = !c.show_usb,
             Item::ShowMediaServers => c.show_media_servers = !c.show_media_servers,
+            Item::AvrEnabled => c.avr.enabled = !c.avr.enabled,
+            Item::AvrProtocol => c.avr.protocol = cycle(&crate::denon::Protocol::ALL, c.avr.protocol, dir),
             Item::AutoClose => c.auto_close_secs = cycle_num(&[0, 5, 10, 15, 30, 60], c.auto_close_secs, dir),
             // Quick switch is always on: only its delay is set.
             Item::SwitchDelay => c.switch_delay_secs = cycle_num(&[1, 2, 3, 4, 5, 7, 10], c.switch_delay_secs, dir),
-            Item::ClockPlace | Item::Sources | Item::Reset | Item::SourceKey | Item::MultikeyOpens | Item::CaptureAccess => {}
+            Item::ClockPlace | Item::Sources | Item::Reset | Item::SourceKey | Item::MultikeyOpens | Item::CaptureAccess | Item::AvrDevice => {}
         }
     }
 
@@ -417,6 +432,8 @@ impl App {
             "section.previews" => tf("value.fps", &[("n", &c.preview_fps.to_string())]),
             "section.clock" if !c.clock.show => t("summary.clock_off").into(),
             "section.clock" => c.clock.style.label().into(),
+            "section.avr" if !c.avr.enabled => t("summary.avr_off").into(),
+            "section.avr" => super::avr::status_text(st),
             "section.remote" => match &st.key_owner {
                 _ if st.takeover_busy => t("remote.applying").into(),
                 KeyOwner::Unsupported => t("remote.unsupported").into(),
@@ -483,6 +500,9 @@ impl App {
             Item::SourceKey => (t("settings.source_key"), Self::remote_status(st)),
             Item::Sources => (t("settings.sources"), t("settings.sources_value").into()),
             Item::Reset => (t("settings.reset"), t(if confirm_reset { "settings.reset_confirm" } else { "settings.reset_value" }).into()),
+            Item::AvrEnabled => (t("settings.avr_enabled"), none()),
+            Item::AvrDevice => (t("settings.avr_device"), super::avr::status_text(st)),
+            Item::AvrProtocol => (t("settings.avr_protocol"), super::avr::protocol_label(c.avr.protocol).into()),
         }
     }
 

@@ -15,6 +15,8 @@ pub(super) struct Entry {
     pub(super) icon: SourceIcon,
     pub(super) current: bool,
     pub(super) hidden: bool,
+    /// The network receiver is behind this input: its inputs are in the options.
+    pub(super) avr: bool,
 }
 
 impl App {
@@ -72,6 +74,9 @@ impl App {
                     Some(t("picker.media_server").to_string())
                 } else if !s.connected {
                     Some(t("picker.not_connected").to_string())
+                } else if let Some(input) = st.avr.active_input().filter(|_| st.avr.serves(&s.id)) {
+                    // The receiver's input being shown through it: "Game · HDMI 3".
+                    Some(format!("{} · {}", input.name, s.port_name()))
                 } else if self.cfg.show_device_names && s.kind == SourceKind::Hdmi {
                     // Under a device name, the port; under the TV's label, what is plugged in.
                     match self.cfg.naming {
@@ -87,7 +92,8 @@ impl App {
                     None
                 };
                 let current = (s.params.is_none() || s.kind == SourceKind::Home) && st.foreground.as_deref() == Some(s.app_id.as_str());
-                Entry { hidden: ov.is_some_and(|o| o.hidden), name, sub, icon, current, source: s }
+                let avr = st.avr.serves(&s.id);
+                Entry { hidden: ov.is_some_and(|o| o.hidden), name, sub, icon, current, avr, source: s }
             })
             .collect()
     }

@@ -31,16 +31,26 @@ impl App {
         let list = vertical(self.cfg.layout);
         let grid = self.cfg.layout == Layout::Grid;
         let old = self.sel;
-        // The key that opens an HDMI input's CEC options: Down, or Right in a
-        // vertical list (where Down moves). In a grid, Down on the last row.
-        let last_row = !grid || self.sel / cols == (n - 1) / cols;
-        let opens_options = (*k == self.options_key_nav()) && last_row && self.selected_hdmi(entries).is_some();
+        // The key that opens an HDMI input's options: Down, or Right in a vertical list
+        // (where Down moves). In a grid, Down on the last row. A long OK opens them anywhere.
+        let opens_options = *k == self.options_key_nav() && self.arrow_opens_options(entries);
         match k {
             _ if opens_options => {
                 if let Some(id) = self.selected_hdmi(entries) {
+                    self.opt_sel = None;
                     self.screen = Screen::Options { id, sel: 0 };
                     return;
                 }
+            }
+            // Long OK: the options of any source, in every layout (the Customize tile opens).
+            Nav::Menu => {
+                self.armed_at = None;
+                self.opt_sel = None;
+                match entries.get(self.sel) {
+                    Some(e) => self.screen = Screen::Options { id: e.source.id.clone(), sel: 0 },
+                    None => self.open_customize(),
+                }
+                return;
             }
             // Source pressed again cycles the inputs and the highlighted one is taken
             // after `switch_delay_secs`, as on LG's picker. Only HDMI inputs with a cable
@@ -135,10 +145,22 @@ impl App {
         if vertical(self.cfg.layout) { Nav::Right } else { Nav::Down }
     }
 
-    /// The selected tile's id if it is a connected HDMI input with HDMI-CEC (one with CEC options).
+    /// The selected tile's id if it is a connected HDMI input with options of its device
+    /// (HDMI-CEC keys, or the network receiver's inputs): the arrow opens those.
     fn selected_hdmi(&self, entries: &[Entry]) -> Option<String> {
         let e = entries.get(self.sel)?;
-        (e.source.kind == SourceKind::Hdmi && e.source.connected && e.source.cec).then(|| e.source.id.clone())
+        (e.source.kind == SourceKind::Hdmi && e.source.connected && (e.source.cec || e.avr)).then(|| e.source.id.clone())
+    }
+
+    /// Whether the arrow that opens the options does it from the selected tile (in a grid,
+    /// only from the last row, where Down has nowhere else to go).
+    fn arrow_opens_options(&self, entries: &[Entry]) -> bool {
+        let n = entries.len() + usize::from(self.cfg.show_customize_tile);
+        let last_row = self.cfg.layout != Layout::Grid || {
+            let cols = grid_cols(n);
+            self.sel / cols == (n.max(1) - 1) / cols
+        };
+        last_row && self.selected_hdmi(entries).is_some()
     }
 
     /// The arrow that moves nowhere in this layout, which opens Customize: Up in a row or on
@@ -205,7 +227,7 @@ impl App {
         // The panel is at least as wide as its key hints (the Sidebar keeps its width and
         // compacts them instead).
         let hint_w = if self.cfg.show_hints {
-            let probe = [(t("key.ok"), t("hint.switch")), ("▲ ▼", t("hint.move")), ("▶", t("hint.cec_options")), (t("key.back"), t("hint.close"))];
+            let probe = [(t("key.ok"), t("hint.switch")), ("▲ ▼", t("hint.move")), ("▶", t("hint.options")), (t("key.back"), t("hint.close"))];
             self.footer_width(p, &probe, 1.0) + 2.0 * pad
         } else {
             0.0
@@ -224,7 +246,18 @@ impl App {
         } else if !st.loaded {
             t("picker.loading").to_string()
         } else {
-            entries.iter().find(|e| e.current).map(|e| tf("picker.watching", &[("name", &e.name)])).unwrap_or_default()
+            entries
+                .iter()
+                .find(|e| e.current)
+                .map(|e| {
+                    // Through the receiver: what it shows too ("Denon AVC-S670H · Game").
+                    let name = match st.avr.active_input().filter(|_| e.avr) {
+                        Some(i) => format!("{} · {}", e.name, i.name),
+                        None => e.name.clone(),
+                    };
+                    tf("picker.watching", &[("name", &name)])
+                })
+                .unwrap_or_default()
         };
         if self.cfg.show_header {
             self.header(p, rect, t("picker.title"), &subtitle, alpha);
@@ -334,6 +367,7 @@ impl App {
                         icon: SourceIcon::Auto,
                         current: false,
                         hidden: false,
+                        avr: false,
                     };
                     self.draw_tile(ui, &clip, rect_i, "settings", &e, selected, false, alpha);
                 }
@@ -399,9 +433,12 @@ impl App {
             self.footer(p, rect, &[(t("key.ok"), t("hint.switch_now")), (cancel, t("hint.cancel")), (t("key.back"), t("hint.close"))], alpha);
         } else if self.cfg.show_hints {
             let mut hints = vec![(t("key.ok"), t("hint.switch")), (mv, t("hint.move"))];
-            // Only on an HDMI input with a device behind it: its CEC options.
-            if self.selected_hdmi(entries).is_some() {
-                hints.push((if vertical(self.cfg.layout) { "▶" } else { "▼" }, t("hint.cec_options")));
+            // The options: with the arrow where it opens them from this tile, else a long OK
+            // (which opens them from any tile, in every layout).
+            if self.arrow_opens_options(entries) {
+                hints.push((if vertical(self.cfg.layout) { "▶" } else { "▼" }, t("hint.options")));
+            } else if self.sel < entries.len() {
+                hints.push((t("key.ok_hold"), t("hint.options")));
             }
             // Without the Customize tile, the arrow that opens it.
             if !self.cfg.show_customize_tile {

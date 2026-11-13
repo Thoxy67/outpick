@@ -2,7 +2,7 @@
 //! with mock inputs, laid out at TV scale (1080 points tall).
 //!
 //! Keys: arrows, Enter = OK, Escape = Back, Backspace = erase/back, Tab = the Source key,
-//! F5 reopens the picker after it closed.
+//! M = a long OK (the selected source's options), F5 reopens the picker after it closed.
 //!
 //! Scripted screenshots for checking the UI without a TV:
 //!   cargo run -- --screenshot shot.png [--keys right,right,ok] [--size 1920x1080] [--config cfg.json]
@@ -53,6 +53,7 @@ fn parse_key(s: &str) -> Option<Nav> {
         "back" => Nav::Back,
         "source" | "input" => Nav::Source,
         "erase" => Nav::Erase,
+        "menu" | "hold" => Nav::Menu,
         _ => return None,
     })
 }
@@ -125,6 +126,7 @@ impl eframe::App for Preview {
                     egui::Key::Escape => Some(Nav::Back),
                     egui::Key::Backspace => Some(Nav::Erase),
                     egui::Key::Tab => Some(Nav::Source),
+                    egui::Key::M if !typing => Some(Nav::Menu),
                     egui::Key::F5 => {
                         self.closed = false;
                         self.app.reopen();

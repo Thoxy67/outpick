@@ -113,7 +113,7 @@ impl App {
                 Some(HintKey::Ok)
             } else if *key == t("key.back") {
                 Some(HintKey::Back)
-            } else if *label == t("hint.cec_options") {
+            } else if *label == t("hint.options") {
                 Some(HintKey::Options)
             } else {
                 None
