@@ -32,6 +32,10 @@
   Xbox, Nintendo Switch, Android TV boxes, PCs, sound systems, streaming boxes.
 - **CEC options per input**: power the device on or off, open its home screen, menu or info
   (only on inputs whose device answers HDMI-CEC).
+- **Denon / Marantz receivers over the network**: the receiver behind an HDMI input is found on
+  the LAN (with several, the one whose model matches the input's HDMI-CEC name), and its options
+  list its own inputs under the names set on it (TV Audio included), its sound mode (Left/Right)
+  and its setup menu, driven from the TV remote. Its tile shows the input it is on.
 - **Everything in one list**: Live TV, USB storage, DLNA media servers, and a Home entry that
   follows the home in use (LG, [Luma](https://github.com/ecklf/lg-luma) or Glasshouse Home).
 - **Yours to shape**: row, grid, list or docked sidebar; nine positions; eight themes and eleven
@@ -43,7 +47,7 @@
 - **Quick switch**: pressing Source again while the picker is open moves to the next connected
   input (unplugged ports, USB, media servers and Home are skipped). The tile shows a countdown and
   the TV switches when it ends (1 to 10 s, 3 by default); OK switches at once, an arrow cancels.
-- **Small**: a 1.9 MB binary and a 1.7 MB `.ipk` (Thumb-2, size-optimised standard library,
+- **Small**: a 2 MB binary and a 1.7 MB `.ipk` (Thumb-2, size-optimised standard library,
   fonts and icons trimmed).
 - **Clean to remove**: a boot hook puts LG's keys back and deletes what the app left behind once
   it is uninstalled; your settings are kept for a reinstall.
@@ -112,8 +116,12 @@ cargo run -- --screenshot shot.png --keys left,left,left,ok --size 1920x1080
 - Press **Input** (or **Multikey**), move with the arrows, **OK** to switch, **Back** to close.
 - Press **Input** again to step through the connected inputs: the TV switches by itself when the
   countdown on the tile ends.
-- On an HDMI input with an HDMI-CEC device, **Down** (**Right** in a list) opens its options:
-  power, the device's home, menu or info, rename, hide.
+- **Hold OK** on any tile, in every layout, to open its options: rename, hide, and on an HDMI
+  input its device's HDMI-CEC keys (power, home, menu, info) and the network receiver's inputs,
+  sound mode and setup menu. **Down** (**Right** in a list) opens them too on an HDMI input with
+  such a device.
+- In the receiver's setup menu the arrows, **OK** and **Back** go to the receiver; hold **Back**
+  to close it.
 - **Customize** is the last tile; if you hide it, the arrow that has nothing to do in the layout
   (Up in a row, Left in a list) opens it.
 - Hold **Back** to close from any screen. Everywhere, **OK** confirms and **Back** cancels.
@@ -135,12 +143,20 @@ chain (LG's filters left as they are), the app off the capture whitelist (other 
 
 ## Configure
 
-Everything is in **Customize**: its first page lists seven sections (Appearance, Layout, Inputs,
-Previews, Clock, Remote, General), each with a summary of its settings; OK opens one, Back returns.
+Everything is in **Customize**: its first page lists eight sections (Appearance, Layout, Inputs,
+Previews, Clock, Remote, Network receiver, General), each with a summary of its settings; OK opens
+one, Back returns.
 Options that cannot apply are hidden (panel opacity without the panel, the clock's details while it
 is off). The Remote section has one switch per key (Source, Multikey) and the quick-switch delay;
 "Reset settings" keeps the inputs and the remote keys. Inputs can be renamed, hidden, reordered and
 given another icon (Customize → Inputs → Manage inputs).
+
+**Network receiver** turns the Denon / Marantz control on or off, picks the receiver (Automatic,
+one of those found, or an IP address typed in) and the protocol: Automatic (HTTP, else telnet),
+HTTP or telnet. HTTP is the default because most receivers take a single telnet client, often
+Home Assistant already; any number of HTTP clients can share it. The receiver must be on the
+same network, with *Network Control* set to *Always On* to answer in standby. The last receiver
+and its inputs are kept in `avr.json` next to the settings, so they show at once.
 
 The settings are kept in `/media/developer/outpick/config.json`, which survives reinstalls. Every
 field is optional; a value that does not fit is ignored alone (the rest of the file is kept), and a
@@ -150,6 +166,9 @@ file that is not JSON is set aside as `config.json.bad`.
 
 - webOS 11 uses native key filters, so the key takeover is not supported there (untested otherwise).
 - On the QNED (webOS 25) the Home tile names LG's home although Luma is the Home there.
+- The receiver's input list covers its HDMI inputs and TV Audio; tuner, HEOS, Bluetooth and
+  phono are left out. Two receivers of the same model, both on, cannot be told apart: pick yours
+  in Customize. Tested with a Denon AVC-S660H and AVC-S670H (2016+ HTTP API).
 - Device icons for PlayStation, Xbox, Nintendo Switch and PCs follow their HDMI-CEC names and
   makers, but no such device was plugged into the tested TVs.
 
