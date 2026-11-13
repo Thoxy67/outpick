@@ -1,3 +1,26 @@
+## v0.2.0 — 2026-11-13
+
+### README: network receivers, long OK for the options, the Network receiver section · [`95f3782`](https://git.thoxy.xyz/thoxy/outpick/commit/95f37829e7a4aaacb5b8c9673e63c5c1912d2237)
+
+### Denon / Marantz receivers over the network; options on a long OK in every layout · [`f1d0bf2`](https://git.thoxy.xyz/thoxy/outpick/commit/f1d0bf2168fc02faee349106975c15f12c3e85c2)
+
+- **Receiver:** the Denon or Marantz behind an HDMI input is found on the LAN (SSDP, the addresses of the receivers the TV already knows as media servers, and a sweep of port 8080, which is what answers inside the app jail). With several, the one whose model matches the input's HDMI-CEC name is taken, then the one whose power matches CEC, then the last one used; two identical receivers both on are left for the user to pick.
+- **Options:** the receiver's input lists its inputs under the names set on it, video ones and TV Audio (which keeps the TV's picture), its sound mode changed with Left/Right (Movie, Music, Game, Direct, Pure Direct, Stereo, Auto, with the receiver's own name for the mode), its setup menu driven from the TV remote (arrows, OK, Back; hold Back to close), and, with several receivers found, which one is this input's. Choosing an input shows the receiver's HDMI input and turns the receiver on first if needed. The tile and the header show the input the receiver is on.
+- **Customize:** a Network receiver section turns it on or off, picks the receiver (Automatic, one of those found, or an IP address typed in) and the protocol: Automatic (HTTP, else telnet), HTTP or telnet. HTTP is the default as any number of clients share it, while most receivers take a single telnet client (often Home Assistant). The last receiver and its inputs are kept in avr.json next to the settings, so they show at once.
+- **Protocol:** AppCommand.xml takes at most 5 commands per request (more get <error>1</error>), so state and input names are two requests; commands passed through formiPhoneAppDirect.xml have their spaces encoded (MNMEN%20ON; a raw space gets HTTP 400). Telnet exchanges are short connections; a list cut by the deadline is treated as unknown.
+- **Worker:** searches only where a receiver is likely (a Denon/Marantz input, one known on the network or used before, or a search asked for), backs off when none answers and does not retry on its own when the choice is ambiguous. Settings sent in a burst are coalesced, a protocol change keeps following the same receiver, a receiver change drops everything of the old one, and a receiver gone for five polls is searched for again (DHCP). Selecting an input gives up as soon as the receiver does not answer, so the app never lingers on exit.
+- **Keys:** a long OK (600 ms) opens any tile's options in every layout (row, grid, list, sidebar), which also fixes the grid where Down only worked from the last row; Down / Right still open them where they did. OK is sent on release, and the options keep their selection on the same action when rows come and go.
+- **Text fields:** the LG keyboard's Enter validates at once, and closing the keyboard with Back leaves the field instead of raising it again; an invalid address says so. /tmp/outpick.keys turns on a key event log in /tmp/outpick-keys.log for debugging remotes.
+- **Tests:** 46, with real answers of an AVC-S660H and AVC-S670H (MAC addresses replaced): device info, both status answers, telnet answers, sound mode groups, the receiver choice, addresses, chunked bodies, the receivers among the TV's media servers. Audited by Claude Fable 5.2.
+
+### README: v0.1.0 release, install steps, use, known limitations, CI checks · [`275f2c0`](https://git.thoxy.xyz/thoxy/outpick/commit/275f2c0a933b7a2d8d9ae83f2fd3548035da5e79)
+
+### README screenshots: the current interface (row and sidebar) · [`1775e13`](https://git.thoxy.xyz/thoxy/outpick/commit/1775e13c171f48839bfd7db6a193bc4c7c593df5)
+
+### Icons: keep only the Outpick app icon (assets/app-icon), interface glyphs in assets/ui-icons · [`c81254d`](https://git.thoxy.xyz/thoxy/outpick/commit/c81254d3688400329b287bfe92296ddda09031ff)
+
+**Full changelog:** [v0.1.0...HEAD](https://git.thoxy.xyz/thoxy/outpick/compare/v0.1.0...HEAD)
+
 ## v0.1.0 — 2026-11-12
 
 ### Pointer hovers only after moving 12 pt from where it was first seen; a long Back (600 ms) closes from anywhere · [`aabfa69`](https://git.thoxy.xyz/thoxy/outpick/commit/aabfa694403423d25b416d8adddaae8ed1318ef6)
