@@ -13,8 +13,9 @@
   <a href="https://git.thoxy.xyz/thoxy/outpick/actions">CI</a>
 </p>
 
-<p align="center"><b>Latest release: <a href="https://git.thoxy.xyz/thoxy/outpick/releases/tag/v0.1.0">v0.1.0</a></b>
-(2026-11-12), installable from the Homebrew Channel.</p>
+<p align="center"><b>Latest release: <a href="https://git.thoxy.xyz/thoxy/outpick/releases/tag/v0.2.0">v0.2.0</a></b>
+(2026-11-13), installable from the Homebrew Channel: Denon / Marantz receivers over the network,
+options on a long OK in every layout.</p>
 
 <p align="center">
   <img src="docs/picker.png" alt="The picker over the TV picture" width="49%">
@@ -56,7 +57,7 @@
 
 | TV | Model | webOS | Firmware | Outpick | Notes |
 |---|---|---|---|---|---|
-| LG OLED C1 (2021) | `OLED55C16LA` | webOS 6 (6.5.3) | 03.53.45 | 0.1.0 | The **Input** key opens Outpick. Previews need "Allow video capture" (Customize → Previews). Luma as Home (executable method). |
+| LG OLED C1 (2021) | `OLED55C16LA` | webOS 6 (6.5.3) | 03.53.45 | 0.2.0 | The **Input** key opens Outpick. Previews need "Allow video capture" (Customize → Previews). Luma as Home (executable method). Denon AVC-S660H on HDMI 2 driven over the network (found automatically with a second Denon on the LAN). |
 | LG QNED86 (2025) | `55QNED86A6A` | webOS 25 (10.3.2) | 33.31.75 | 0.1.0 | Remote without an Input key: a short press on **Multikey (···)** opens Outpick, a long press keeps LG's accessibility menu. Live previews work without any option. Luma as Home (manifest method). |
 
 Both are rooted with the [Homebrew Channel](https://github.com/webosbrew/webos-homebrew-channel).
