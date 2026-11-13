@@ -27,12 +27,13 @@ eframe = { version = "0.37", optional = true, default-features = false, features
 sdl2 = { version = "0.38", optional = true, features = ["use-pkgconfig"] }
 libc = "0.2"
 png = { version = "0.18", optional = true }
+# Must be the glow egui_glow uses (its Painter takes this crate's Context): 0.17 for egui_glow 0.37.
 glow = { version = "0.17", optional = true }
 egui_glow = { version = "0.37", optional = true, default-features = false }
 
 [build-dependencies]
 # Icons are rasterized at build time (build.rs): no SVG renderer in the binary.
-resvg = { version = "0.45", default-features = false }
+resvg = { version = "0.50", default-features = false }
 
 [profile.release]
 opt-level = "s"
