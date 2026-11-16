@@ -1,3 +1,25 @@
+## v0.2.1 — 2026-11-16
+
+### Applications tile, updates from the picker, receiver volume, Liquid Glass, clearer Customize, steadier remote and previews · [`7c2c546`](https://git.thoxy.xyz/thoxy/outpick/commit/7c2c546976b910a87670b4092890d35dc280b922)
+
+- **Applications:** an optional tile (Customize → Inputs, off by default) opens the TV's installed apps as a grid or a list, read from the TV (listLaunchPoints) each time it opens, one row per launch point with its params. Icons are the apps' own PNGs, decoded with the png crate (now in the TV build) and shrunk; the jailed app reads those it can and root copies the others into the shared folder (only files that are PNGs, into a root-owned folder, refreshed and pruned at each opening). Titles the font cannot draw fall back to the app id. Checked on the C1 and the QNED86.
+- **Updates:** on opening, once a day at most, the feed of the hbc branch is read with the TV's curl (https only, certificates verified, time and size bounded; as the jailed app, through root only when it cannot reach the network). An offer is kept only if it is newer, its sha256 is 64 hex digits and its package is on this repository's releases. Customize → General has the switch and an Update row; the Update screen shows the notes of every version since the installed one (CHANGELOG.md) and OK hands the install to the Homebrew Channel, which downloads, checks the hash and installs. The first start of a new version has root refresh the key filter and boot hook. The check ran on the QNED86; the install itself is untested until a newer version is published.
+- **Receiver:** volume and mute in the options (GetVolumeLevel / GetMuteStatus in their own request, MV? / MU? over telnet), changed with relative steps only (MVUP / MVDOWN twice for 1.0, MUON / MUOFF). The options open on the receiver's input in use.
+- **Options:** sections of buttons laid out like the picker (the receiver's inputs, volume, sound mode chips, the device's keys, this input); the arrows follow the buttons on screen and Right at the end of a line goes on to the next.
+- **Remote:** a held arrow stops at the end of a list and never opens or leaves a screen; a long Back closes while still held; the Magic Remote's click waits for the release like OK, so a long OK no longer validates first. Where a long OK means nothing, OK acts on the press. The long press time and the gap that makes an arrow a held one are set in Customize → Remote. Left on Customize's root goes back to the picker.
+- **Customize:** each section's page is titled with its name and icon, a line under the rows says what the selected one does (also in the Sources editor, with column titles, and in the receiver list, which says what to check when none is found), and the Appearance and Layout pages show a miniature of the picker.
+- **Themes:** Liquid Glass, translucent panels with one rim following each shape's corners and a white selection ring. The fade at a scrolling edge is no longer drawn over a see-through panel.
+- **Previews:** a picture is filed under an input only if that input stayed in front from before the capture until after it, and remembered only once it has been stable (0.8 s for the input in front at opening, 2 s after a switch) and never from a frame taken after a launch was sent; the capture file is removed before each request and read only when complete and fresh; black frames replace nothing; a tile whose preview went away drops its texture. Proven by tests of the rules; no input was playing on the TVs when it was tried.
+- **Keys:** the jailed app no longer reports the Source key as broken when it merely cannot see the filter's folder (the QNED86's jail).
+- **README:** v0.2.1, the new features, a 2.2 MB binary and a 1.9 MB ipk.
+- **Tests:** 81.
+
+### Dependencies: resvg 0.50, lockfile to the latest compatible versions; glow stays 0.17 for egui_glow 0.37 · [`2720ec2`](https://git.thoxy.xyz/thoxy/outpick/commit/2720ec20340544afacb5696a81440e4943f93fa9)
+
+### README: v0.2.0 is the latest release; the C1 tested with it and its Denon · [`2f884e9`](https://git.thoxy.xyz/thoxy/outpick/commit/2f884e929193e9221cf6aef9871eb5c5c496fb4a)
+
+**Full changelog:** [v0.2.0...HEAD](https://git.thoxy.xyz/thoxy/outpick/compare/v0.2.0...HEAD)
+
 ## v0.2.0 — 2026-11-13
 
 ### README: network receivers, long OK for the options, the Network receiver section · [`95f3782`](https://git.thoxy.xyz/thoxy/outpick/commit/95f37829e7a4aaacb5b8c9673e63c5c1912d2237)
