@@ -10,22 +10,22 @@
       "id": "com.thoxy.outpick",
       "title": "Outpick",
       "shortDescription": "A modern, customizable input picker for rooted LG webOS TVs: HDMI inputs with device names and live previews, CEC options, USB and media servers.",
-      "fullDescriptionUrl": "https://git.thoxy.xyz/thoxy/outpick/releases/download/v0.2.0/description.html",
-      "iconUri": "https://git.thoxy.xyz/thoxy/outpick/releases/download/v0.2.0/largeIcon.png",
+      "fullDescriptionUrl": "https://git.thoxy.xyz/thoxy/outpick/releases/download/v0.2.1/description.html",
+      "iconUri": "https://git.thoxy.xyz/thoxy/outpick/releases/download/v0.2.1/largeIcon.png",
       "manifest": {
         "id": "com.thoxy.outpick",
-        "version": "0.2.0",
+        "version": "0.2.1",
         "type": "native",
         "title": "Outpick",
         "appDescription": "A modern, customizable input picker for rooted LG webOS TVs: HDMI inputs with device names and live previews, CEC options, USB and media servers.",
-        "iconUri": "https://git.thoxy.xyz/thoxy/outpick/releases/download/v0.2.0/largeIcon.png",
+        "iconUri": "https://git.thoxy.xyz/thoxy/outpick/releases/download/v0.2.1/largeIcon.png",
         "sourceUrl": "https://git.thoxy.xyz/thoxy/outpick",
         "rootRequired": "optional",
-        "ipkUrl": "https://git.thoxy.xyz/thoxy/outpick/releases/download/v0.2.0/com.thoxy.outpick_0.2.0_arm.ipk",
+        "ipkUrl": "https://git.thoxy.xyz/thoxy/outpick/releases/download/v0.2.1/com.thoxy.outpick_0.2.1_arm.ipk",
         "ipkHash": {
-          "sha256": "05769855e51d6daac429dd7b7ba5d373e70fba544e6360971dd46362b2cee60e"
+          "sha256": "108f08de1974fe8f1d740edb80d66b62ff4d45d9fc352e6e9bd287d1c3c1f45b"
         },
-        "ipkSize": 1810800
+        "ipkSize": 1940030
       }
     }
   ]
