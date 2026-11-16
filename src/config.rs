@@ -103,6 +103,27 @@ impl Naming {
     }
 }
 
+/// How the Apps list shows the apps.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub enum AppsView {
+    /// Cards, a large icon over the title.
+    #[default]
+    Grid,
+    /// Rows, a small icon beside the title.
+    List,
+}
+
+impl AppsView {
+    pub const ALL: [AppsView; 2] = [AppsView::Grid, AppsView::List];
+    pub fn label(self) -> &'static str {
+        match self {
+            AppsView::Grid => t("apps_view.grid"),
+            AppsView::List => t("apps_view.list"),
+        }
+    }
+}
+
 /// Corner shape of panels and tiles.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
@@ -207,6 +228,11 @@ pub struct SourceOverride {
     pub hidden: bool,
 }
 
+/// The long press times Customize offers, in ms.
+pub const LONG_PRESS_MS: [u32; 6] = [300, 400, 500, 600, 800, 1000];
+/// The arrow repeat gaps Customize offers, in ms.
+pub const HOLD_GAP_MS: [u32; 5] = [100, 150, 200, 250, 300];
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Config {
@@ -247,6 +273,10 @@ pub struct Config {
     pub show_usb: bool,
     /// DLNA/UPnP media servers on the network.
     pub show_media_servers: bool,
+    /// A tile that opens the list of installed apps (off: nothing about apps is read).
+    pub show_apps: bool,
+    /// How the Apps list shows them.
+    pub apps_view: AppsView,
     /// Show the Customize tile in the picker. Without it the settings are still reached with
     /// the arrow that has nothing to do in the layout (Up in a row or on a grid's first row,
     /// Left in a list or sidebar); the footer then says so.
@@ -261,6 +291,10 @@ pub struct Config {
     /// The remote's Multikey (accessibility) button opens the picker too, for
     /// remotes with no Source button (with the Source key takeover on).
     pub multikey_opens: bool,
+    /// How long OK or Back is held for its long press (options, close everything), in ms.
+    pub long_press_ms: u32,
+    /// The same arrow again within this many ms is a held arrow repeating, not a new press.
+    pub hold_gap_ms: u32,
     /// Animations (selection glide, fade).
     pub animations: bool,
     /// Source order by id; sources not listed follow in the TV's order.
@@ -269,6 +303,8 @@ pub struct Config {
     pub clock: ClockConfig,
     /// The Denon/Marantz receiver on the network.
     pub avr: crate::denon::AvrConfig,
+    /// Ask the feed for a newer version once a day, on opening.
+    pub check_updates: bool,
 }
 
 impl Default for Config {
@@ -297,16 +333,21 @@ impl Default for Config {
             show_home: true,
             show_usb: true,
             show_media_servers: false,
+            show_apps: false,
+            apps_view: AppsView::Grid,
             show_customize_tile: true,
             auto_close_secs: 15,
             switch_delay_secs: 3,
             animations: true,
             source_key_opens: true,
             multikey_opens: false,
+            long_press_ms: 600,
+            hold_gap_ms: 150,
             order: Vec::new(),
             sources: Vec::new(),
             clock: ClockConfig::default(),
             avr: crate::denon::AvrConfig::default(),
+            check_updates: true,
         }
     }
 }
@@ -443,6 +484,8 @@ impl Config {
         self.dim = self.dim.clamp(0.0, 0.8);
         self.auto_close_secs = self.auto_close_secs.min(120);
         self.switch_delay_secs = self.switch_delay_secs.clamp(1, 10);
+        self.long_press_ms = self.long_press_ms.clamp(LONG_PRESS_MS[0], LONG_PRESS_MS[LONG_PRESS_MS.len() - 1]);
+        self.hold_gap_ms = self.hold_gap_ms.clamp(HOLD_GAP_MS[0], HOLD_GAP_MS[HOLD_GAP_MS.len() - 1]);
         self.clock.x = self.clock.x.clamp(0.0, 1.0);
         self.clock.y = self.clock.y.clamp(0.0, 1.0);
         self.clock.size = self.clock.size.clamp(0.4, 3.0);
@@ -522,6 +565,7 @@ mod tests {
     fn one_bad_value_keeps_the_rest() {
         let c = Config::from_json(
             br#"{"theme":"no-such-theme","layout":"grid","scale":"big","dim":0.5,
+                 "longPressMs":"slow","holdGapMs":200,
                  "clock":{"show":true,"style":"sundial","x":0.25},
                  "order":["HDMI_2",7,"HDMI_1"],
                  "sources":[{"id":"HDMI_1","name":"Box","icon":"teapot"},{"id":"HDMI_2","hidden":true},3]}"#,
@@ -532,6 +576,7 @@ mod tests {
         assert_eq!(c.scale, d.scale);
         assert_eq!(c.layout, Layout::Grid);
         assert_eq!(c.dim, 0.5);
+        assert_eq!((c.long_press_ms, c.hold_gap_ms), (d.long_press_ms, 200));
         assert!(c.clock.show);
         assert_eq!(c.clock.style, ClockStyle::Minimal);
         assert_eq!(c.clock.x, 0.25);
@@ -558,6 +603,8 @@ mod tests {
             dim: -1.0,
             auto_close_secs: 999,
             switch_delay_secs: 0,
+            long_press_ms: 50,
+            hold_gap_ms: 5000,
             preview_fps: 3,
             clock: ClockConfig { x: -2.0, y: 4.0, size: 10.0, ..Default::default() },
             ..Config::default()
@@ -566,6 +613,7 @@ mod tests {
         assert_eq!(c.version, 1);
         assert_eq!((c.scale, c.panel_opacity, c.dim), (1.5, 0.4, 0.0));
         assert_eq!((c.auto_close_secs, c.switch_delay_secs), (120, 1));
+        assert_eq!((c.long_press_ms, c.hold_gap_ms), (300, 300));
         assert_eq!((c.clock.x, c.clock.y, c.clock.size), (0.0, 1.0, 3.0));
         for (fps, want) in [(0, 1), (1, 1), (2, 2), (3, 2), (4, 4), (60, 4)] {
             c.preview_fps = fps;

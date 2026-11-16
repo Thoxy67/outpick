@@ -6,6 +6,7 @@
 //! which a TV remote has no Tab key for. Everything is painted from `Tokens`,
 //! and every string comes from `locales/*.lang` through `i18n`.
 
+mod apps;
 mod avr;
 mod entries;
 mod options;
@@ -13,6 +14,7 @@ mod picker;
 mod pickers;
 mod settings;
 mod sources;
+mod update;
 mod widgets;
 
 use crate::config::{Config, Layout, Position};
@@ -90,7 +92,7 @@ enum Screen {
     Sources { sel: usize, col: usize, grabbed: bool },
     /// Renaming source `id`; returns to the Sources row `sel`.
     Rename { id: String, sel: usize, text: String, tv_name: String, from_options: bool },
-    /// HDMI-CEC options of input `id` (opened with Down, or Right in a list).
+    /// The options of input `id` (opened with Down, Right in a list, or a long OK).
     Options { id: String, sel: usize },
     /// The four layouts as large cards; `sel` indexes `Layout::ALL`.
     StylePick { sel: usize },
@@ -108,6 +110,11 @@ enum Screen {
     PositionPick { sel: usize },
     /// Moving the clock over the whole screen (the interface shown faded); `orig` is restored on Back.
     ClockPlace { orig: crate::config::ClockConfig },
+    /// The installed apps (the Apps tile); `sel` indexes them. `placed`: the selection was put
+    /// on the app in front once the list came (or moved by a key since).
+    AppPick { sel: usize, placed: bool },
+    /// A newer version: its notes since this one, and its install (OK).
+    Update,
 }
 
 
@@ -132,6 +139,8 @@ pub struct App {
     hits: std::cell::RefCell<Vec<(Rect, Hit)>>,
     /// When the last click came, to drop an OK key the same press also sends.
     last_click: f64,
+    /// When the last OK key was handled, to make the same press's click only hover.
+    last_ok: f64,
     /// Place the highlight without gliding (on open, when the current source is first known).
     snap: bool,
     /// Source pictures uploaded to the GPU, by source id, with the frame they hold.
@@ -142,8 +151,12 @@ pub struct App {
     /// The picker panel's last size as fractions of the screen, with its layout (for the
     /// position picker's preview).
     last_panel_frac: Option<(Layout, Vec2)>,
-    /// The last arrow while placing the clock, and when: a held arrow moves faster.
-    clock_last: Option<(Nav, f64)>,
+    /// The last arrow and when, to tell a held one (see `held`).
+    last_arrow: Option<(Nav, f64)>,
+    /// The key being handled is an arrow held down (the same one again within `hold_gap_ms`):
+    /// it stops at the end of a list instead of going around, never opens or leaves a
+    /// screen, and moves the clock faster.
+    held: bool,
     /// Where the pointer was first reported since opening; it only hovers once it has
     /// moved away from there (a Magic Remote at rest must not steal the selection).
     pointer_origin: Option<Pos2>,
@@ -156,9 +169,35 @@ pub struct App {
     /// The last sound mode asked for: where Left/Right go on from when the receiver reports a
     /// mode outside the groups (Dolby Digital, DTS…).
     sound_asked: Option<usize>,
+    /// The volume and mute just asked for and when: shown until the receiver reports them.
+    volume_pending: Option<(Option<f32>, Option<bool>, f64)>,
     /// The options row the keys last selected, as an action: rows come and go under it (the
     /// receiver turning on adds the sound row), and the selection stays on what it was.
     opt_sel: Option<options::OptAction>,
+    /// Where the options' buttons were last drawn (the arrows go to the nearest one).
+    opt_geo: Vec<(options::OptAction, Rect)>,
+    /// The picker is being drawn as Customize's miniature (its own animations, its panel
+    /// following the picker's settings).
+    mini: bool,
+    /// The Apps list's icons on the GPU, by row (None: not uploaded, or the generic icon),
+    /// uploaded as they show and freed far from view or on leaving; for list `app_tex_seq`.
+    app_tex: Vec<Option<egui::TextureHandle>>,
+    app_tex_seq: u64,
+    /// Its titles as the font can draw them.
+    app_titles: Vec<String>,
+    /// Its grid's columns as last drawn (the arrows move by them).
+    app_cols: usize,
+    /// An app was asked for and the TV has not answered yet; what it said when it refused.
+    app_launching: bool,
+    app_error: Option<String>,
+    /// Pixels per point, for the size the app icons are read at.
+    ppp: f32,
+    /// The Update screen's notes as the font draws them (for `UpdateState::notes_seq`), how
+    /// far they are scrolled and how far they can be, in points.
+    update_lines: Vec<update::NoteLine>,
+    update_notes_seq: u64,
+    update_scroll: f32,
+    update_max: f32,
 }
 
 impl App {
@@ -170,11 +209,29 @@ impl App {
         let t = tokens(&cfg);
         theme::apply(ctx, &t);
         backend.avr.configure(cfg.avr.clone());
+        // In the background, if the last check is a day old: never in the way of the first frame.
+        if cfg.check_updates {
+            let _ = backend.commands.send(Command::CheckUpdate { manual: false });
+        }
         App {
+            update_lines: Vec::new(),
+            update_notes_seq: 0,
+            update_scroll: 0.0,
+            update_max: 0.0,
             sent_avr: cfg.avr.clone(),
             sound_pending: None,
             sound_asked: None,
+            volume_pending: None,
             opt_sel: None,
+            opt_geo: Vec::new(),
+            mini: false,
+            app_tex: Vec::new(),
+            app_tex_seq: 0,
+            app_titles: Vec::new(),
+            app_cols: 1,
+            app_launching: false,
+            app_error: None,
+            ppp: 1.0,
             saved: cfg.clone(),
             cfg,
             t,
@@ -191,11 +248,13 @@ impl App {
             scroll: 0.0,
             grab_order: None,
             last_panel_frac: None,
-            clock_last: None,
+            last_arrow: None,
+            held: false,
             pointer_origin: None,
             pointer_live: false,
             hits: Default::default(),
             last_click: f64::NEG_INFINITY,
+            last_ok: f64::NEG_INFINITY,
             snap: true,
             preview_tex: Default::default(),
         }
@@ -227,6 +286,19 @@ impl App {
         matches!(self.screen, Screen::Rename { .. } | Screen::IpEntry { .. }) && self.closing.is_none()
     }
 
+    /// Whether a long OK means something here (`Nav::Menu`): elsewhere the runner acts on
+    /// the press itself instead of waiting for the release.
+    #[cfg_attr(not(feature = "webos"), allow(dead_code))]
+    pub fn wants_long_ok(&self) -> bool {
+        matches!(self.screen, Screen::Picker | Screen::Options { .. } | Screen::AvrRemote { .. }) && self.closing.is_none()
+    }
+
+    /// How long OK or Back is held for its long press.
+    #[cfg_attr(not(feature = "webos"), allow(dead_code))]
+    pub fn long_press(&self) -> std::time::Duration {
+        std::time::Duration::from_millis(self.cfg.long_press_ms.into())
+    }
+
     fn retheme(&mut self, ctx: &egui::Context) {
         self.cfg.clamp();
         self.t = tokens(&self.cfg);
@@ -254,6 +326,9 @@ impl App {
         }
         let st = self.backend.state.lock().map(|s| s.clone()).unwrap_or_default();
         self.sync_previews(&ctx, &st);
+        self.ppp = ctx.pixels_per_point();
+        self.sync_app_icons(&ctx, &st);
+        self.sync_update_notes(&ctx, &st);
 
         // Fade in, and out before closing.
         let fade_in = if self.cfg.animations { ease(((now - opened) / 0.16) as f32) } else { 1.0 };
@@ -286,6 +361,12 @@ impl App {
                     }
                     translated.extend(self.hover(*pos))
                 }
+                // The click of a press whose OK key came first (sent on the press): it was
+                // handled already, the click only moves the selection.
+                Nav::Click(pos) if now - self.last_ok < 0.25 => {
+                    self.pointer_live = true;
+                    translated.extend(self.hover(*pos));
+                }
                 // Placing the clock: a click puts it there.
                 Nav::Click(pos) if matches!(self.screen, Screen::ClockPlace { .. }) => {
                     let r = ui.max_rect();
@@ -309,6 +390,10 @@ impl App {
                 }
                 // The Magic Remote's OK also comes as a key with its click: one press, one action.
                 Nav::Ok if now - self.last_click < 0.25 => {}
+                Nav::Ok => {
+                    self.last_ok = now;
+                    translated.push(Nav::Ok);
+                }
                 other => translated.push(other.clone()),
             }
         }
@@ -321,6 +406,7 @@ impl App {
                 *built_for = Some(app.cfg.clone());
             }
         };
+        let hold_gap = self.cfg.hold_gap_ms as f64 / 1000.0;
         for k in &translated {
             if *k == Nav::Exit {
                 // Leaving with the receiver's menu open: close it too.
@@ -332,6 +418,9 @@ impl App {
                 break;
             }
             refresh(self, &mut entries, &mut built_for);
+            let arrow = matches!(k, Nav::Up | Nav::Down | Nav::Left | Nav::Right);
+            self.held = arrow && self.last_arrow.as_ref().is_some_and(|(last, at)| last == k && now - at < hold_gap);
+            self.last_arrow = arrow.then(|| (k.clone(), now));
             match self.screen {
                 Screen::Picker => self.picker_key(k, &entries, now),
                 Screen::Settings { .. } | Screen::SettingsPage { .. } => self.settings_key(k, &ctx, &st),
@@ -339,11 +428,13 @@ impl App {
                 Screen::Rename { .. } => self.rename_key(k),
                 Screen::Options { .. } => self.options_key(k, &st, now),
                 Screen::StylePick { .. } | Screen::PositionPick { .. } => self.pick_key(k, &ctx),
-                Screen::ClockPlace { .. } => self.clock_key(k, now),
+                Screen::ClockPlace { .. } => self.clock_key(k),
                 Screen::IconPick { .. } => self.icon_key(k, &st),
                 Screen::AvrPick { .. } => self.avr_pick_key(k, &st),
                 Screen::IpEntry { .. } => self.ip_key(k),
                 Screen::AvrRemote { .. } => self.avr_remote_key(k),
+                Screen::AppPick { .. } => self.app_pick_key(k, &st, now),
+                Screen::Update => self.update_key(k, &st, now),
             }
             if self.closing.is_some() {
                 break;
@@ -430,8 +521,8 @@ impl App {
                     *confirm_reset = false;
                 }
             }
-            (Some(Hit::OptionRow(i)), Screen::Options { sel, .. } | Screen::AvrPick { sel, .. }) => *sel = i,
-            (Some(Hit::PickCell(i)), Screen::StylePick { sel } | Screen::PositionPick { sel } | Screen::IconPick { sel, .. }) => *sel = i,
+            (Some(Hit::OptionRow(i)), Screen::Options { sel, .. } | Screen::AvrPick { sel, .. } | Screen::AppPick { sel, .. }) => *sel = i,
+            (Some(Hit::PickCell(i)), Screen::StylePick { sel } | Screen::PositionPick { sel } | Screen::IconPick { sel, .. } | Screen::AppPick { sel, .. }) => *sel = i,
             (Some(Hit::SourceCell(r, c)), Screen::Sources { sel, col, grabbed }) if !*grabbed => {
                 *sel = r;
                 *col = c;
@@ -536,6 +627,8 @@ impl App {
             Screen::IconPick { id, sel } => self.draw_icon_pick(ui, &p, st, screen, alpha, &id, sel),
             Screen::AvrPick { sel, .. } => self.draw_avr_pick(&p, st, screen, offset, alpha, sel),
             Screen::AvrRemote { .. } => self.draw_avr_remote(&p, st, screen, alpha),
+            Screen::AppPick { sel, placed } => self.draw_app_pick(ui, &p, st, screen, offset, alpha, sel, placed),
+            Screen::Update => self.draw_update(ui, &p, st, screen, offset, alpha),
             Screen::IpEntry { text, bad, .. } => {
                 // OK on something that is not an address says so where the help was.
                 let help = if bad { t("avr.ip_bad") } else { t("avr.ip_help") };

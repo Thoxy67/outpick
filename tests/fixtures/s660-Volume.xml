@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<rx>
+<cmd>
+<volume>-34.0</volume>
+<state>variable</state>
+<limit>OFF</limit>
+<disptype>ABSOLUTE</disptype>
+<dispvalue>46.0</dispvalue>
+</cmd>
+<cmd>
+<mute>off</mute>
+</cmd>
+</rx>

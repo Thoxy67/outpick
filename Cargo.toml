@@ -15,8 +15,8 @@ path = "src/main.rs"
 default = ["desktop"]
 # Desktop preview window with mock inputs (for designing the UI on a PC).
 desktop = ["dep:eframe", "dep:png"]
-# The real TV build: SDL-webOS + GLES2 + luna-service2.
-webos = ["dep:sdl2", "dep:glow", "dep:egui_glow"]
+# The real TV build: SDL-webOS + GLES2 + luna-service2 (png: the Apps list's icons).
+webos = ["dep:sdl2", "dep:glow", "dep:egui_glow", "dep:png"]
 
 [dependencies]
 # No default fonts: the UI ships a subset of Inter (tools/subset-fonts.sh).

@@ -19,18 +19,21 @@ pub enum ThemeKind {
     AdwaitaDark,
     BreezeDark,
     SolarizedDark,
+    /// Translucent panels with bright rims: the picture shows through everything.
+    LiquidGlass,
     StudioLight,
     SoftLight,
 }
 
 impl ThemeKind {
-    pub const ALL: [ThemeKind; 8] = [
+    pub const ALL: [ThemeKind; 9] = [
         ThemeKind::Studio,
         ThemeKind::Oled,
         ThemeKind::SoftDark,
         ThemeKind::AdwaitaDark,
         ThemeKind::BreezeDark,
         ThemeKind::SolarizedDark,
+        ThemeKind::LiquidGlass,
         ThemeKind::StudioLight,
         ThemeKind::SoftLight,
     ];
@@ -43,6 +46,7 @@ impl ThemeKind {
             ThemeKind::AdwaitaDark => t("theme.adwaita_dark"),
             ThemeKind::BreezeDark => t("theme.breeze_dark"),
             ThemeKind::SolarizedDark => t("theme.solarized"),
+            ThemeKind::LiquidGlass => t("theme.liquid_glass"),
             ThemeKind::StudioLight => t("theme.studio_light"),
             ThemeKind::SoftLight => t("theme.soft_light"),
         }
@@ -119,6 +123,9 @@ impl Accent {
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Tokens {
     pub dark: bool,
+    /// Glass: the fills are translucent (their alpha is part of the colour) and the panel
+    /// gets a bright rim along its top.
+    pub glass: bool,
     pub chrome: Color32,
     pub card: Color32,
     pub card_border: Color32,
@@ -134,6 +141,9 @@ pub struct Tokens {
     pub accent_soft: Color32,
     pub accent_border: Color32,
     pub accent_text: Color32,
+    /// The ring around the selection: the accent, white on glass unless an accent is chosen
+    /// (set by `new`).
+    pub ring: Color32,
     pub separator: Color32,
     pub shadow: Color32,
     pub primary_bg: Color32,
@@ -150,10 +160,17 @@ const fn rgb(r: u8, g: u8, b: u8) -> Color32 {
     Color32::from_rgb(r, g, b)
 }
 
+fn rgba(r: u8, g: u8, b: u8, a: u8) -> Color32 {
+    Color32::from_rgba_unmultiplied(r, g, b, a)
+}
+
 impl Tokens {
     pub fn new(kind: ThemeKind, accent: Accent) -> Self {
         let mut t = Self::for_kind(kind);
+        // Glass rings its selection in white, like the light its rims catch.
+        t.ring = if t.glass { rgba(255, 255, 255, 225) } else { t.accent };
         if let Some(a) = accent.rgb() {
+            t.ring = a;
             t.accent = a;
             t.accent_soft = Color32::from_rgba_unmultiplied(a.r(), a.g(), a.b(), if t.dark { 46 } else { 36 });
             t.accent_border = Color32::from_rgba_unmultiplied(a.r(), a.g(), a.b(), 130);
@@ -166,6 +183,7 @@ impl Tokens {
         match kind {
             ThemeKind::Studio => Tokens {
                 dark: true,
+                glass: false,
                 chrome: rgb(20, 20, 21),
                 card: rgb(26, 26, 28),
                 card_border: rgb(40, 40, 44),
@@ -181,6 +199,7 @@ impl Tokens {
                 accent_soft: Color32::from_rgba_unmultiplied(139, 124, 246, 46),
                 accent_border: Color32::from_rgba_unmultiplied(160, 148, 255, 110),
                 accent_text: rgb(214, 208, 255),
+                ring: Color32::TRANSPARENT,
                 separator: rgb(38, 38, 42),
                 shadow: Color32::from_black_alpha(140),
                 primary_bg: rgb(246, 246, 248),
@@ -204,6 +223,7 @@ impl Tokens {
             },
             ThemeKind::SoftDark => Tokens {
                 dark: true,
+                glass: false,
                 chrome: rgb(58, 58, 68),
                 card: rgb(54, 54, 64),
                 card_border: rgb(70, 70, 82),
@@ -219,6 +239,7 @@ impl Tokens {
                 accent_soft: Color32::from_rgba_unmultiplied(138, 154, 232, 48),
                 accent_border: Color32::from_rgba_unmultiplied(138, 154, 232, 150),
                 accent_text: rgb(190, 200, 252),
+                ring: Color32::TRANSPARENT,
                 separator: rgb(36, 36, 44),
                 shadow: Color32::from_black_alpha(110),
                 primary_bg: rgb(86, 104, 196),
@@ -232,6 +253,7 @@ impl Tokens {
             },
             ThemeKind::AdwaitaDark => Tokens {
                 dark: true,
+                glass: false,
                 chrome: rgb(46, 46, 50),
                 card: rgb(54, 54, 58),
                 card_border: rgb(64, 64, 68),
@@ -247,6 +269,7 @@ impl Tokens {
                 accent_soft: Color32::from_rgba_unmultiplied(53, 132, 228, 60),
                 accent_border: Color32::from_rgba_unmultiplied(120, 174, 237, 140),
                 accent_text: rgb(120, 174, 237),
+                ring: Color32::TRANSPARENT,
                 separator: rgb(24, 24, 27),
                 shadow: Color32::from_black_alpha(140),
                 primary_bg: rgb(53, 132, 228),
@@ -260,6 +283,7 @@ impl Tokens {
             },
             ThemeKind::BreezeDark => Tokens {
                 dark: true,
+                glass: false,
                 chrome: rgb(38, 42, 48),
                 card: rgb(29, 33, 38),
                 card_border: rgb(52, 56, 61),
@@ -275,6 +299,7 @@ impl Tokens {
                 accent_soft: Color32::from_rgba_unmultiplied(58, 172, 232, 40),
                 accent_border: Color32::from_rgba_unmultiplied(58, 172, 232, 160),
                 accent_text: rgb(80, 184, 238),
+                ring: Color32::TRANSPARENT,
                 separator: rgb(46, 50, 54),
                 shadow: Color32::from_black_alpha(150),
                 primary_bg: rgb(30, 118, 176),
@@ -288,6 +313,7 @@ impl Tokens {
             },
             ThemeKind::SolarizedDark => Tokens {
                 dark: true,
+                glass: false,
                 chrome: rgb(7, 54, 66),
                 card: rgb(7, 54, 66),
                 card_border: rgb(0, 37, 47),
@@ -303,6 +329,7 @@ impl Tokens {
                 accent_soft: Color32::from_rgba_unmultiplied(38, 139, 210, 46),
                 accent_border: Color32::from_rgba_unmultiplied(38, 139, 210, 120),
                 accent_text: rgb(253, 246, 227),
+                ring: Color32::TRANSPARENT,
                 separator: rgb(0, 37, 47),
                 shadow: Color32::from_black_alpha(150),
                 primary_bg: rgb(38, 139, 210),
@@ -314,8 +341,41 @@ impl Tokens {
                 radius: 8.0,
                 radius_lg: 12.0,
             },
+            // No blur is possible over the TV's picture: the glass is a cool dark tint the
+            // picture shows through, with white veils for the tiles and light rims.
+            ThemeKind::LiquidGlass => Tokens {
+                dark: true,
+                glass: true,
+                chrome: rgba(16, 20, 28, 150),
+                card: rgba(20, 24, 34, 150),
+                card_border: rgba(255, 255, 255, 72),
+                field: rgba(255, 255, 255, 26),
+                field_border: rgba(255, 255, 255, 58),
+                hover: rgba(255, 255, 255, 60),
+                pressed: rgba(255, 255, 255, 84),
+                text: rgb(248, 250, 255),
+                text_dim: rgb(216, 222, 234),
+                text_faint: rgb(178, 186, 202),
+                icon: rgb(232, 236, 246),
+                accent: rgb(64, 156, 255),
+                accent_soft: rgba(64, 156, 255, 72),
+                accent_border: rgba(150, 205, 255, 150),
+                accent_text: rgb(198, 227, 255),
+                ring: Color32::TRANSPARENT,
+                separator: rgba(255, 255, 255, 38),
+                shadow: Color32::from_black_alpha(90),
+                primary_bg: rgba(255, 255, 255, 230),
+                primary_text: rgb(12, 12, 14),
+                success: rgb(79, 184, 107),
+                danger: rgb(240, 96, 96),
+                warning: rgb(240, 190, 90),
+                radius_sm: 10.0,
+                radius: 14.0,
+                radius_lg: 20.0,
+            },
             ThemeKind::StudioLight => Tokens {
                 dark: false,
+                glass: false,
                 chrome: rgb(246, 246, 248),
                 card: rgb(252, 252, 253),
                 card_border: rgb(222, 222, 228),
@@ -331,6 +391,7 @@ impl Tokens {
                 accent_soft: Color32::from_rgba_unmultiplied(108, 92, 231, 36),
                 accent_border: Color32::from_rgba_unmultiplied(108, 92, 231, 120),
                 accent_text: rgb(80, 64, 200),
+                ring: Color32::TRANSPARENT,
                 separator: rgb(226, 226, 232),
                 shadow: Color32::from_black_alpha(50),
                 primary_bg: rgb(20, 20, 24),
@@ -344,6 +405,7 @@ impl Tokens {
             },
             ThemeKind::SoftLight => Tokens {
                 dark: false,
+                glass: false,
                 chrome: rgb(232, 230, 236),
                 card: rgb(240, 238, 243),
                 card_border: rgb(208, 205, 215),
@@ -359,6 +421,7 @@ impl Tokens {
                 accent_soft: Color32::from_rgba_unmultiplied(110, 128, 216, 44),
                 accent_border: Color32::from_rgba_unmultiplied(110, 128, 216, 170),
                 accent_text: rgb(46, 58, 146),
+                ring: Color32::TRANSPARENT,
                 separator: rgb(210, 207, 218),
                 shadow: Color32::from_black_alpha(40),
                 primary_bg: rgb(80, 98, 190),

@@ -13,9 +13,9 @@
   <a href="https://git.thoxy.xyz/thoxy/outpick/actions">CI</a>
 </p>
 
-<p align="center"><b>Latest release: <a href="https://git.thoxy.xyz/thoxy/outpick/releases/tag/v0.2.0">v0.2.0</a></b>
-(2026-11-13), installable from the Homebrew Channel: Denon / Marantz receivers over the network,
-options on a long OK in every layout.</p>
+<p align="center"><b>Latest release: <a href="https://git.thoxy.xyz/thoxy/outpick/releases/tag/v0.2.1">v0.2.1</a></b>
+(2026-11-16), installable from the Homebrew Channel: an optional Applications tile, updates
+checked and installed from the picker, the receiver's volume, a Liquid Glass theme.</p>
 
 <p align="center">
   <img src="docs/picker.png" alt="The picker over the TV picture" width="49%">
@@ -35,20 +35,27 @@ options on a long OK in every layout.</p>
   (only on inputs whose device answers HDMI-CEC).
 - **Denon / Marantz receivers over the network**: the receiver behind an HDMI input is found on
   the LAN (with several, the one whose model matches the input's HDMI-CEC name), and its options
-  list its own inputs under the names set on it (TV Audio included), its sound mode (Left/Right)
-  and its setup menu, driven from the TV remote. Its tile shows the input it is on.
+  list its own inputs under the names set on it (TV Audio included), its volume and mute, its
+  sound mode and its setup menu, driven from the TV remote. Its tile shows the input it is on.
 - **Everything in one list**: Live TV, USB storage, DLNA media servers, and a Home entry that
   follows the home in use (LG, [Luma](https://github.com/ecklf/lg-luma) or Glasshouse Home).
-- **Yours to shape**: row, grid, list or docked sidebar; nine positions; eight themes and eleven
-  accent colours; sizes, opacity, corners, icons; rename, hide and reorder sources; French and
-  English.
+- **An Applications tile, if you want one** (off by default): the TV's installed apps with their
+  own icons, as a grid or a list, read from the TV each time it opens; OK launches one.
+- **Yours to shape**: row, grid, list or docked sidebar; nine positions; nine themes (one of
+  them translucent, Liquid Glass) and eleven accent colours; sizes, opacity, corners, icons;
+  rename, hide and reorder sources; French and English. Every setting says what it does in a
+  line under the list, and the Appearance and Layout pages show a miniature of the picker.
 - **An on-screen clock** in seven styles, placed anywhere on the screen.
 - **The remote's Source key opens it** (and, on remotes without one, a short press on Multikey,
   a long press staying LG's accessibility), reversible from its own settings.
 - **Quick switch**: pressing Source again while the picker is open moves to the next connected
   input (unplugged ports, USB, media servers and Home are skipped). The tile shows a countdown and
   the TV switches when it ends (1 to 10 s, 3 by default); OK switches at once, an arrow cancels.
-- **Small**: a 2 MB binary and a 1.7 MB `.ipk` (Thumb-2, size-optimised standard library,
+- **Updates from the picker**: once a day at most, on opening, it asks this repository's
+  Homebrew Channel feed for a newer version (Customize → General turns that off). The Update
+  screen shows the notes of every version since yours, and OK has the Homebrew Channel download
+  the package, check its sha256 and install it.
+- **Small**: a 2.2 MB binary and a 1.9 MB `.ipk` (Thumb-2, size-optimised standard library,
   fonts and icons trimmed).
 - **Clean to remove**: a boot hook puts LG's keys back and deletes what the app left behind once
   it is uninstalled; your settings are kept for a reinstall.
@@ -119,12 +126,17 @@ cargo run -- --screenshot shot.png --keys left,left,left,ok --size 1920x1080
   countdown on the tile ends.
 - **Hold OK** on any tile, in every layout, to open its options: rename, hide, and on an HDMI
   input its device's HDMI-CEC keys (power, home, menu, info) and the network receiver's inputs,
-  sound mode and setup menu. **Down** (**Right** in a list) opens them too on an HDMI input with
+  volume, sound mode and setup menu. **Down** (**Right** in a list) opens them too on an HDMI input with
   such a device.
 - In the receiver's setup menu the arrows, **OK** and **Back** go to the receiver; hold **Back**
   to close it.
 - **Customize** is the last tile; if you hide it, the arrow that has nothing to do in the layout
   (Up in a row, Left in a list) opens it.
+- A held arrow stops at the end of a list instead of going round, and never opens or leaves a
+  screen. How long a long press takes, and how fast a repeating arrow counts as held, are set
+  in Customize → Remote.
+- The **Applications** tile (Customize → Inputs, off by default) opens the TV's apps as a grid
+  or a list; **OK** launches one.
 - Hold **Back** to close from any screen. Everywhere, **OK** confirms and **Back** cancels.
 
 As root on the TV:

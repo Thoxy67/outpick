@@ -2,6 +2,7 @@
 
 use super::entries::Entry;
 use super::settings::Item;
+use super::widgets::{RIM, walk};
 use super::{App, Hit, Nav, Screen};
 use crate::config::{Layout, Position};
 use crate::i18n::t;
@@ -24,12 +25,10 @@ pub(super) const POSITION_GRID: [Position; 9] = [
 
 impl App {
     /// Placing the clock: the arrows move it (1 % of the screen a step, 3 % while an arrow
-    /// is held: the same arrow again within 150 ms), OK keeps, Back cancels.
-    pub(super) fn clock_key(&mut self, k: &Nav, now: f64) {
+    /// is held), OK keeps, Back cancels.
+    pub(super) fn clock_key(&mut self, k: &Nav) {
         let Screen::ClockPlace { orig } = self.screen.clone() else { return };
-        let held = self.clock_last.as_ref().is_some_and(|(last, at)| last == k && now - at < 0.15);
-        self.clock_last = matches!(k, Nav::Left | Nav::Right | Nav::Up | Nav::Down).then(|| (k.clone(), now));
-        let (dx, dy) = if held { (0.03, 0.03) } else { (0.01, 0.015) };
+        let (dx, dy) = if self.held { (0.03, 0.03) } else { (0.01, 0.015) };
         let c = &mut self.cfg.clock;
         match k {
             Nav::Left => c.x = (c.x - dx).max(0.0),
@@ -58,7 +57,7 @@ impl App {
         let mut c = self.cfg.clock;
         c.show = true;
         let r = crate::clock::draw(p, screen, &c, &k, alpha);
-        p.rect_stroke(r.expand(10.0 * s), 10.0 * s, Stroke::new(2.0 * s, veil(k.accent, alpha)), StrokeKind::Outside);
+        p.rect_stroke(r.expand(10.0 * s), 10.0 * s, Stroke::new(2.0 * s, veil(k.ring, alpha)), StrokeKind::Outside);
         let hints = [("◀ ▲ ▼ ▶", t("hint.move")), (t("key.ok"), t("hint.confirm")), (t("key.back"), t("hint.cancel"))];
         // Wide enough for the help line and every hint, so nothing leaves the bar.
         let help = p.layout_no_wrap(t("clock.place_help").to_string(), regular(17.0 * s), k.text_dim).size().x;
@@ -72,14 +71,57 @@ impl App {
         ui.ctx().request_repaint_after(std::time::Duration::from_millis(500));
     }
 
+    /// Customize's live miniature of the picker, in the largest free room around its `panel`
+    /// (none where there is no room for a legible one). The picker is drawn at a fraction of
+    /// its size into a small screen; whatever it moves is put back after.
+    pub(super) fn draw_mini_picker(&mut self, ui: &Ui, p: &egui::Painter, st: &TvState, screen: Rect, panel: Rect, alpha: f32) {
+        let s = self.cfg.scale;
+        let m = 24.0 * s;
+        // Above, below, left and right of the panel.
+        let rooms = [
+            Rect::from_min_max(screen.min, pos2(screen.max.x, panel.min.y)),
+            Rect::from_min_max(pos2(screen.min.x, panel.max.y), screen.max),
+            Rect::from_min_max(screen.min, pos2(panel.min.x, screen.max.y)),
+            Rect::from_min_max(pos2(panel.max.x, screen.min.y), screen.max),
+        ];
+        let widest = rooms
+            .iter()
+            .map(|r| r.shrink(m))
+            .map(|r| (r.width().min(r.height() * 16.0 / 9.0).min(0.34 * screen.width()), r))
+            .max_by(|a, b| a.0.total_cmp(&b.0));
+        let Some((w, room)) = widest.filter(|(w, _)| *w >= 0.22 * screen.width()) else { return };
+        // Against the panel, centred on it along that side.
+        let size = vec2(w, w * 9.0 / 16.0);
+        let c = pos2(
+            panel.center().x.clamp(room.min.x + size.x / 2.0, room.max.x - size.x / 2.0),
+            panel.center().y.clamp(room.min.y + size.y / 2.0, room.max.y - size.y / 2.0),
+        );
+        let mini = Rect::from_center_size(c, size);
+        let k = self.t;
+        let r = 10.0 * s;
+        // A screen, dark whatever the theme: the TV's picture.
+        p.rect_filled(mini, r, veil(Color32::from_rgb(14, 16, 20), alpha));
+        let saved = (self.cfg.scale, self.sel, self.scroll, self.snap, self.last_panel_frac);
+        let hits = self.hits.borrow().len();
+        self.cfg.scale = s * mini.height() / screen.height();
+        self.mini = true;
+        let entries = self.visible_entries(st);
+        self.draw_picker(ui, &p.with_clip_rect(mini.shrink(1.0)), st, &entries, mini, Vec2::ZERO, alpha);
+        self.mini = false;
+        (self.cfg.scale, self.sel, self.scroll, self.snap, self.last_panel_frac) = saved;
+        // Only a picture: its tiles and hints are no pointer targets.
+        self.hits.borrow_mut().truncate(hits);
+        p.rect_stroke(mini, r, Stroke::new(1.5 * s, veil(k.text_faint, alpha * 0.7)), StrokeKind::Inside);
+    }
+
     /// Keys of the style and position pickers: arrows choose, OK keeps, Back cancels.
     pub(super) fn pick_key(&mut self, k: &Nav, ctx: &egui::Context) {
         match self.screen.clone() {
             Screen::StylePick { mut sel } => {
                 let n = Layout::ALL.len();
                 match k {
-                    Nav::Left | Nav::Up => sel = (sel + n - 1) % n,
-                    Nav::Right | Nav::Down => sel = (sel + 1) % n,
+                    Nav::Left | Nav::Up => sel = walk(sel, n, -1, self.held),
+                    Nav::Right | Nav::Down => sel = walk(sel, n, 1, self.held),
                     Nav::Ok => {
                         self.cfg.layout = Layout::ALL[sel];
                         self.retheme(ctx);
@@ -153,14 +195,15 @@ impl App {
         // Always centred: the picker does not move while a style is chosen.
         let rect = Rect::from_center_size(screen.center(), size.min(screen.size() - Vec2::splat(40.0 * s)));
         self.panel(p, rect, alpha);
-        self.header(p, rect, t("settings.layout"), t("pick.style_help"), alpha);
+        self.header(p, rect, None, t("settings.layout"), t("pick.style_help"), alpha);
         let top = rect.min.y + 64.0 * s + 12.0 * s;
         let hx = self.anim(ui, "pick-x", rect.min.x + pad + sel as f32 * (cw + gap), 0.14);
         for (i, layout) in Layout::ALL.iter().enumerate() {
             let card = Rect::from_min_size(pos2(rect.min.x + pad + i as f32 * (cw + gap), top), vec2(cw, ch));
             self.add_hit(card, Hit::PickCell(i));
             let current = *layout == self.cfg.layout;
-            p.rect(card, k.radius_lg * 1.4 * s, veil(k.field, alpha * 0.8), Stroke::new(1.0, veil(k.field_border, alpha)), StrokeKind::Inside);
+            p.rect(card, k.radius_lg * 1.4 * s, veil(k.field, alpha * 0.8), self.border(1.0, veil(k.field_border, alpha)), StrokeKind::Inside);
+            self.rim(p, card, k.radius_lg * 1.4 * s, alpha * RIM);
             let screen_r = Rect::from_min_size(pos2(card.min.x + 24.0 * s, card.min.y + 22.0 * s), vec2(cw - 48.0 * s, (cw - 48.0 * s) * 9.0 / 16.0));
             p.rect(screen_r, 6.0 * s, veil(k.card, alpha), Stroke::new(2.0 * s, veil(k.text_dim, alpha)), StrokeKind::Inside);
             let ink = if i == sel { k.accent } else { k.text_dim };
@@ -172,7 +215,7 @@ impl App {
             }
         }
         let ring = Rect::from_min_size(pos2(hx, top), vec2(cw, ch)).expand(5.0 * s);
-        p.rect_stroke(ring, k.radius_lg * 1.4 * s + 5.0 * s, Stroke::new(3.0 * s, veil(k.accent, alpha)), StrokeKind::Outside);
+        p.rect_stroke(ring, k.radius_lg * 1.4 * s + 5.0 * s, Stroke::new(3.0 * s, veil(k.ring, alpha)), StrokeKind::Outside);
         self.footer(p, rect, &[("◀ ▶", t("hint.choose")), (t("key.ok"), t("hint.confirm")), (t("key.back"), t("hint.cancel"))], alpha);
     }
 
@@ -188,7 +231,7 @@ impl App {
         let rect = Rect::from_center_size(screen.center(), size.min(screen.size() - Vec2::splat(40.0 * s)));
         self.panel(p, rect, alpha);
         let name = POSITION_GRID[sel].label();
-        self.header(p, rect, t("settings.position"), name, alpha);
+        self.header(p, rect, None, t("settings.position"), name, alpha);
         let mini = Rect::from_min_size(pos2(rect.min.x + pad, rect.min.y + 76.0 * s), vec2(sw, sh));
         p.rect(mini, 10.0 * s, veil(mix(k.card, Color32::BLACK, 0.35), alpha), Stroke::new(2.0 * s, veil(k.text_dim, alpha)), StrokeKind::Inside);
         let inner = mini.shrink(14.0 * s);
@@ -213,7 +256,7 @@ impl App {
         // The panel, gliding to the chosen place.
         let target = self.panel_glyph_rect(inner, POSITION_GRID[sel]);
         let at = Rect::from_min_size(pos2(self.anim(ui, "pos-x", target.min.x, 0.14), self.anim(ui, "pos-y", target.min.y, 0.14)), target.size());
-        p.rect(at, 5.0 * s, veil(k.accent_soft, alpha), Stroke::new(2.5 * s, veil(k.accent, alpha)), StrokeKind::Inside);
+        p.rect(at, 5.0 * s, veil(k.accent_soft, alpha), Stroke::new(2.5 * s, veil(k.ring, alpha)), StrokeKind::Inside);
         let glyph = at.shrink(3.0 * s);
         // The glyph is the panel itself here: a sidebar shows its rows as a list does.
         let inside = if sidebar { Layout::List } else { self.cfg.layout };

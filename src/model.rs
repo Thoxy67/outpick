@@ -4,6 +4,7 @@ use crate::icons::SourceIcon;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex, mpsc};
+use std::time::{Duration, Instant};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[cfg_attr(not(feature = "webos"), allow(dead_code))] // used by the TV backend (and tests)
@@ -17,6 +18,8 @@ pub enum SourceKind {
     MediaServer,
     /// The TV's home screen (LG's, or one that took its place: Luma, Glasshouse Home).
     Home,
+    /// Not a source: the tile that opens the list of installed apps (Customize's Apps switch).
+    Apps,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -94,6 +97,25 @@ impl Source {
             tv_icon: SourceIcon::Home,
             // As the remote's Home key opens it, so a replacement home opens as home.
             params: Some(serde_json::json!({ "activateType": "home", "launchType": "homeKey" })),
+            brand: None,
+            label_custom: false,
+            signal: None,
+            cec: false,
+            cec_power: None,
+        }
+    }
+
+    /// The Apps tile: opens the list of installed apps, never launched itself.
+    pub fn apps() -> Self {
+        Source {
+            id: "APPS".into(),
+            app_id: String::new(),
+            label: "Applications".into(),
+            kind: SourceKind::Apps,
+            connected: true,
+            device: None,
+            tv_icon: SourceIcon::Apps,
+            params: None,
             brand: None,
             label_custom: false,
             signal: None,
@@ -362,6 +384,262 @@ pub fn decode_bmp(b: &[u8]) -> Option<(usize, usize, Vec<u8>)> {
     Some((w, h, rgba))
 }
 
+/// A capture's file is whole: as long as its header says, with every row it announces.
+/// The capture service may answer before it has finished writing.
+#[cfg_attr(not(feature = "webos"), allow(dead_code))] // used by the TV backend (and tests)
+pub fn bmp_complete(b: &[u8]) -> bool {
+    b.get(2..6).is_some_and(|s| u32::from_le_bytes([s[0], s[1], s[2], s[3]]) as usize == b.len()) && decode_bmp(b).is_some()
+}
+
+/// A frame with nothing to show: black, or nearly one flat colour (an input
+/// switching, no signal yet, a blanked video plane). Judged on a sample of pixels.
+#[cfg_attr(not(feature = "webos"), allow(dead_code))] // used by the TV backend (and tests)
+pub fn frame_blank(rgba: &[u8]) -> bool {
+    let luma: Vec<f32> = rgba
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .step_by(7)
+        .map(|p| 0.299 * p[0] as f32 + 0.587 * p[1] as f32 + 0.114 * p[2] as f32)
+        .collect();
+    if luma.is_empty() {
+        return true;
+    }
+    let mean = luma.iter().sum::<f32>() / luma.len() as f32;
+    let var = luma.iter().map(|l| (l - mean) * (l - mean)).sum::<f32>() / luma.len() as f32;
+    mean < 12.0 || var.sqrt() < 5.0
+}
+
+/// The preview rules' times. A frame is shown once its input has been in front
+/// `SETTLE` (the picture of a switch is black or still the old input's). It may be
+/// remembered for the next openings once its input has been in front `KEEP_FIRST`
+/// if that input was already there when the picker opened (only its report may be
+/// corrected at first: Live TV, then the HDMI input), `KEEP` after a switch seen
+/// while open (the picture resyncs). It is then kept once confirmed (`pending_fate`).
+#[cfg_attr(not(feature = "webos"), allow(dead_code))]
+pub const PREVIEW_SETTLE: Duration = Duration::from_millis(400);
+#[cfg_attr(not(feature = "webos"), allow(dead_code))]
+pub const PREVIEW_KEEP_FIRST: Duration = Duration::from_millis(800);
+#[cfg_attr(not(feature = "webos"), allow(dead_code))]
+pub const PREVIEW_KEEP: Duration = Duration::from_secs(2);
+#[cfg_attr(not(feature = "webos"), allow(dead_code))]
+pub const PREVIEW_CONFIRM: Duration = Duration::from_millis(500);
+
+/// The app in front as the preview loop has seen it, and since when.
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(not(feature = "webos"), allow(dead_code))]
+pub struct Front {
+    pub app: Option<String>,
+    pub since: Instant,
+    /// The first app seen in front since the process started: it was there before the
+    /// picker opened, not switched to while it is open.
+    pub first: bool,
+}
+
+#[cfg_attr(not(feature = "webos"), allow(dead_code))]
+impl Front {
+    /// What the process sees first (None until the TV has said).
+    pub fn new(app: Option<String>, now: Instant) -> Self {
+        Front { app, since: now, first: true }
+    }
+
+    /// Notes what is in front at `now`; `since` moves only when it changes. True on a change.
+    pub fn observe(&mut self, app: Option<String>, now: Instant) -> bool {
+        if app == self.app {
+            return false;
+        }
+        // Learning what is in front is not a switch; any change after that is.
+        let first = self.first && self.app.is_none();
+        *self = Front { app, since: now, first };
+        true
+    }
+
+    /// How long its input must have been in front for a frame to be remembered.
+    pub fn keep_after(&self) -> Duration {
+        if self.first { PREVIEW_KEEP_FIRST } else { PREVIEW_KEEP }
+    }
+}
+
+/// What a captured frame may be used for.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(not(feature = "webos"), allow(dead_code))]
+pub enum Verdict {
+    /// Not filed anywhere, and why.
+    Reject(&'static str),
+    /// The live tile's picture.
+    Show,
+    /// Also its input's remembered picture, once confirmed (`pending_fate`).
+    Keep,
+}
+
+/// Judges a frame: `before` is what was in front when it was asked for (at `asked`),
+/// `after` when it came back; `closing`, the picker started closing meanwhile; `launch`,
+/// when an app or input was last launched. Any change in between, even there and back,
+/// and any launch since the input came in front (the app in front is reported late),
+/// files it nowhere.
+#[cfg_attr(not(feature = "webos"), allow(dead_code))]
+pub fn judge_frame(before: &Front, after: &Front, asked: Instant, launch: Option<Instant>, closing: bool, blank: bool) -> Verdict {
+    if closing {
+        return Verdict::Reject("closing");
+    }
+    if before != after {
+        return Verdict::Reject("input changed");
+    }
+    if before.app.is_none() {
+        return Verdict::Reject("nothing in front");
+    }
+    if launch.is_some_and(|l| l >= before.since) {
+        return Verdict::Reject("switching");
+    }
+    let stable = asked.saturating_duration_since(before.since);
+    if stable < PREVIEW_SETTLE {
+        return Verdict::Reject("settling");
+    }
+    if blank {
+        return Verdict::Reject("blank");
+    }
+    if stable >= before.keep_after() { Verdict::Keep } else { Verdict::Show }
+}
+
+/// What becomes of a `Keep` frame waiting to be remembered.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(not(feature = "webos"), allow(dead_code))]
+pub enum Fate {
+    Save,
+    Wait,
+    Drop,
+}
+
+/// A `Keep` frame taken under `front`, back at `done`. It is surely its input's when
+/// something was launched after it came back (that input was on screen until then:
+/// the user's pick), or when the picker closes before any launch, or when the same
+/// input is still seen in front `PREVIEW_CONFIRM` later. A change of the app in front
+/// with no launch after the frame (a switch from elsewhere, reported late) drops it.
+#[cfg_attr(not(feature = "webos"), allow(dead_code))]
+pub fn pending_fate(front: &Front, done: Instant, now_front: &Front, now: Instant, launch: Option<Instant>, closing: bool) -> Fate {
+    if launch.is_some_and(|l| l >= done) {
+        return Fate::Save;
+    }
+    if front != now_front {
+        return Fate::Drop;
+    }
+    if closing || now.saturating_duration_since(done) >= PREVIEW_CONFIRM {
+        return Fate::Save;
+    }
+    Fate::Wait
+}
+
+/// A small picture decoded off the UI thread (an app's icon).
+#[derive(Clone)]
+pub struct Image {
+    pub width: usize,
+    pub height: usize,
+    /// RGBA, top row first.
+    pub rgba: Arc<Vec<u8>>,
+}
+
+/// An installed app, as the Apps list shows it.
+#[derive(Clone)]
+pub struct AppInfo {
+    pub id: String,
+    pub title: String,
+    /// Its launch point's parameters (None: a plain launch).
+    pub params: Option<serde_json::Value>,
+    /// The colour LG paints behind its icon (`iconColor`): some icons are white on transparent.
+    pub color: Option<[u8; 3]>,
+    /// None when no PNG could be read: the list draws a generic icon.
+    pub icon: Option<Image>,
+}
+
+/// The installed apps, asked for only while their list is open.
+#[derive(Clone)]
+pub enum Apps {
+    Loading,
+    Ready(Vec<AppInfo>),
+    Failed(String),
+}
+
+/// Pixels beyond which an icon is not decoded (a launcher icon is 80 to 400): 4 MiB of
+/// RGBA at most, briefly, before `shrink` brings it down to what a row or card draws.
+#[cfg_attr(not(feature = "webos"), allow(dead_code))] // used by the TV backend
+pub const ICON_MAX_PX: u32 = 1024;
+
+/// `img` brought down to at most `max` pixels a side by averaging whole blocks (alpha
+/// weighted, so transparent pixels do not darken the edges); as it is when it fits.
+#[cfg_attr(not(feature = "webos"), allow(dead_code))] // used by the TV backend (and tests)
+pub fn shrink(img: Image, max: usize) -> Image {
+    let f = img.width.max(img.height).div_ceil(max.max(1));
+    if f <= 1 {
+        return img;
+    }
+    let (w, h) = (img.width.div_ceil(f), img.height.div_ceil(f));
+    let mut out = Vec::with_capacity(w * h * 4);
+    for by in 0..h {
+        for bx in 0..w {
+            let (mut sum, mut alpha, mut n) = ([0u64; 3], 0u64, 0u64);
+            for y in by * f..((by + 1) * f).min(img.height) {
+                for x in bx * f..((bx + 1) * f).min(img.width) {
+                    let o = (y * img.width + x) * 4;
+                    let a = img.rgba[o + 3] as u64;
+                    for c in 0..3 {
+                        sum[c] += img.rgba[o + c] as u64 * a;
+                    }
+                    alpha += a;
+                    n += 1;
+                }
+            }
+            let ch = |c: usize| sum[c].checked_div(alpha).unwrap_or(0) as u8;
+            out.extend_from_slice(&[ch(0), ch(1), ch(2), (alpha / n.max(1)) as u8]);
+        }
+    }
+    Image { width: w, height: h, rgba: Arc::new(out) }
+}
+
+/// Decodes a PNG of at most `max`×`max` pixels to RGBA. Palette, grey, 16-bit and RGB
+/// images are expanded by the decoder's transformations; anything else is None.
+#[cfg(any(feature = "desktop", feature = "webos"))]
+#[cfg_attr(not(feature = "webos"), allow(dead_code))] // used by the TV backend (and tests)
+pub fn decode_png(bytes: &[u8], max: u32) -> Option<Image> {
+    use png::{BitDepth, ColorType};
+    // A header claiming a huge picture fails here, before any allocation.
+    let mut d = png::Decoder::new_with_limits(std::io::Cursor::new(bytes), png::Limits { bytes: 8 << 20 });
+    d.set_transformations(png::Transformations::normalize_to_color8());
+    let mut r = d.read_info().ok()?;
+    let (w, h) = r.info().size();
+    if w == 0 || h == 0 || w > max || h > max {
+        return None;
+    }
+    let mut buf = vec![0u8; r.output_buffer_size()?];
+    let frame = r.next_frame(&mut buf).ok()?;
+    if frame.bit_depth != BitDepth::Eight {
+        return None;
+    }
+    let (w, h) = (frame.width as usize, frame.height as usize);
+    let data = buf.get(..frame.buffer_size())?;
+    let channels = match frame.color_type {
+        ColorType::Grayscale => 1,
+        ColorType::GrayscaleAlpha => 2,
+        ColorType::Rgb => 3,
+        ColorType::Rgba => 4,
+        ColorType::Indexed => return None, // expanded to RGB(A) by the transformations
+    };
+    let stride = frame.line_size;
+    let mut rgba = Vec::with_capacity(w * h * 4);
+    for y in 0..h {
+        let row = data.get(y * stride..y * stride + w * channels)?;
+        for px in row.chunks_exact(channels) {
+            rgba.extend_from_slice(&match *px {
+                [g] => [g, g, g, 255],
+                [g, a] => [g, g, g, a],
+                [r, g, b] => [r, g, b, 255],
+                [r, g, b, a] => [r, g, b, a],
+                _ => return None,
+            });
+        }
+    }
+    Some(Image { width: w, height: h, rgba: Arc::new(rgba) })
+}
+
 /// What the TV side tells the UI. Written by the backend thread, read every frame.
 #[derive(Default, Clone)]
 pub struct TvState {
@@ -388,6 +666,46 @@ pub struct TvState {
     pub avr: crate::denon::AvrState,
     /// Addresses of Denon/Marantz receivers the TV already knows (their media servers).
     pub receiver_hints: Vec<String>,
+    /// The installed apps while their list is open (None otherwise: nothing is kept).
+    pub apps: Option<Apps>,
+    /// Bumped at each new `apps` (the icons may come in a second time, from root's copies).
+    pub apps_seq: u64,
+    /// The answer to the last `OpenApp` (None while it is on its way).
+    pub app_launch: Option<Result<(), String>>,
+    /// The update check, its notes and the install.
+    pub update: UpdateState,
+}
+
+/// What is known about a newer version, shown in Customize and on the Update screen.
+#[derive(Clone, Default)]
+pub struct UpdateState {
+    /// A check is on its way.
+    pub checking: bool,
+    /// How the last check ended (remembered between openings): None before any.
+    pub checked: Option<Result<(), String>>,
+    /// The newer version found (remembered until it is installed).
+    pub offer: Option<crate::update::Offer>,
+    /// Its release notes, read when the Update screen opens.
+    pub notes: Option<Notes>,
+    /// Bumped at each new `notes`, so the UI prepares them once.
+    pub notes_seq: u64,
+    pub install: Option<Install>,
+}
+
+#[derive(Clone)]
+pub enum Notes {
+    Loading,
+    Ready(crate::update::Notes),
+    Failed(String),
+}
+
+/// The Homebrew Channel's install of the offer.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Install {
+    /// Its last status ("Downloading…") and, while downloading, how far (0..1).
+    Running { status: String, progress: Option<f32> },
+    Done,
+    Failed(String),
 }
 
 pub type Shared = Arc<Mutex<TvState>>;
@@ -410,6 +728,22 @@ pub enum Command {
     /// Sends raw command `cmd` to the receiver (its setup menu's keys), first showing
     /// input `app_id` when given (where the receiver's menu appears).
     AvrKey { app_id: Option<String>, cmd: String },
+    /// Lists the installed apps into `TvState::apps` (while it is still `Loading`), their
+    /// icons read for rows drawing them `icon_px` pixels wide.
+    /// Opens app `id` from the Apps list with its launch point's params, and says how that
+    /// went in `TvState::app_launch`.
+    OpenApp { id: String, params: Option<serde_json::Value> },
+    ListApps {
+        #[cfg_attr(not(feature = "webos"), allow(dead_code))] // the mock's icons are made, not read
+        icon_px: u32,
+    },
+    /// Asks the feed for a newer version, in the background: `manual` now, else only when
+    /// the last check is a day old.
+    CheckUpdate { manual: bool },
+    /// Reads the offer's release notes into `UpdateState::notes`.
+    UpdateNotes,
+    /// Has the Homebrew Channel install the offer.
+    InstallUpdate,
 }
 
 /// A TV (or a mock): fills `Shared` from a worker thread and takes commands.
@@ -433,8 +767,10 @@ impl Backend {
 pub fn mock_backend(repaint: impl Fn() + Send + Clone + 'static) -> Backend {
     let state: Shared = Arc::default();
     let (tx, rx) = mpsc::channel::<Command>();
-    // The receiver is a real one: the desktop preview talks to the network too.
-    let avr = crate::denon::start(state.clone(), repaint.clone());
+    // The receiver is a real one: the desktop preview talks to the network too, unless
+    // OUTPICK_MOCK_AVR asks for a simulated one behind HDMI 2.
+    let fake_avr = std::env::var_os("OUTPICK_MOCK_AVR").is_some();
+    let avr = if fake_avr { crate::denon::Handle::detached() } else { crate::denon::start(state.clone(), repaint.clone()) };
     let s = state.clone();
     std::thread::spawn(move || {
         let src = |n: u8, label: &str, connected: bool, device: Option<&str>, icon: SourceIcon| Source {
@@ -487,10 +823,24 @@ pub fn mock_backend(repaint: impl Fn() + Send + Clone + 'static) -> Backend {
                 store("USB:mock", "SanDisk Ultra", SourceKind::Usb, "1"),
                 store("DLNA:freebox", "Freebox Server", SourceKind::MediaServer, "Media server"),
             ];
-            st.foreground = Some("com.webos.app.hdmi1".into());
+            // OUTPICK_MOCK_FG: another app in front (an app id from `mock_apps`, say).
+            st.foreground = Some(std::env::var("OUTPICK_MOCK_FG").unwrap_or_else(|_| "com.webos.app.hdmi1".into()));
             st.key_owner = KeyOwner::Lg;
             st.home = Some(Source::home("Luma"));
             st.loaded = true;
+            if fake_avr {
+                st.avr = mock_avr();
+            }
+            mock_update_start(&mut st.update);
+        }
+        if mock_update_has("slow") {
+            // Checking on opening, for a while.
+            let (s, repaint) = (s.clone(), repaint.clone());
+            std::thread::spawn(move || {
+                std::thread::sleep(std::time::Duration::from_secs(30));
+                mock_update_found(&mut s.lock().unwrap().update);
+                repaint();
+            });
         }
         repaint();
         // Fake pictures: a moving "live" one for the input in front, a still one for HDMI 2.
@@ -531,20 +881,328 @@ pub fn mock_backend(repaint: impl Fn() + Send + Clone + 'static) -> Backend {
                     if let Some(app) = app_id {
                         s.lock().unwrap().foreground = Some(app);
                     }
-                    crate::denon::select(&s, &code);
+                    if fake_avr {
+                        let mut st = s.lock().unwrap();
+                        st.avr.power = Some(true);
+                        st.avr.input = Some(code);
+                    } else {
+                        crate::denon::select(&s, &code);
+                    }
                 }
                 Command::AvrKey { app_id, cmd } => {
                     if let Some(app) = app_id {
                         s.lock().unwrap().foreground = Some(app);
                     }
-                    crate::denon::send(&s, &cmd);
+                    if fake_avr {
+                        mock_avr_key(&mut s.lock().unwrap().avr, &cmd);
+                    } else {
+                        crate::denon::send(&s, &cmd);
+                    }
                 }
-                Command::Refresh | Command::Cec { .. } => {}
+                Command::ListApps { .. } => {
+                    // OUTPICK_MOCK_APPS: slow (loading for 5 s), empty or error, to see those states.
+                    let mode = std::env::var("OUTPICK_MOCK_APPS").unwrap_or_default();
+                    std::thread::sleep(std::time::Duration::from_millis(if mode == "slow" { 5000 } else { 300 }));
+                    let apps = match mode.as_str() {
+                        "empty" => Apps::Ready(Vec::new()),
+                        "error" => Apps::Failed("Denied method call \"listLaunchPoints\"".into()),
+                        _ => Apps::Ready(mock_apps()),
+                    };
+                    let mut st = s.lock().unwrap();
+                    if matches!(st.apps, Some(Apps::Loading)) {
+                        st.apps = Some(apps);
+                        st.apps_seq += 1;
+                    }
+                }
+                Command::OpenApp { id, params } => {
+                    if std::env::var_os("OUTPICK_DEBUG").is_some() {
+                        eprintln!("open app {id} {params:?}");
+                    }
+                    let mut st = s.lock().unwrap();
+                    st.app_launch = Some(if std::env::var("OUTPICK_MOCK_APPS").as_deref() == Ok("launchfail") {
+                        Err(format!("{id}: Application not found"))
+                    } else {
+                        st.foreground = Some(id);
+                        Ok(())
+                    });
+                }
+                Command::CheckUpdate { manual: true } => {
+                    let (s, repaint) = (s.clone(), repaint.clone());
+                    s.lock().unwrap().update.checking = true;
+                    std::thread::spawn(move || {
+                        std::thread::sleep(std::time::Duration::from_millis(if mock_update_has("slow") { 30_000 } else { 1200 }));
+                        let mut st = s.lock().unwrap();
+                        let u = &mut st.update;
+                        u.checking = false;
+                        if mock_update_has("error") {
+                            u.checked = Some(Err(MOCK_UPDATE_ERROR.into()));
+                        } else if mock_update_has("available") || mock_update_has("slow") {
+                            mock_update_found(u);
+                        } else {
+                            u.checked = Some(Ok(()));
+                            u.offer = None;
+                        }
+                        drop(st);
+                        repaint();
+                    });
+                }
+                Command::UpdateNotes => {
+                    let Some(offer) = s.lock().unwrap().update.offer.clone() else { continue };
+                    {
+                        let mut st = s.lock().unwrap();
+                        st.update.notes = Some(Notes::Loading);
+                        st.update.notes_seq += 1;
+                    }
+                    let (s, repaint) = (s.clone(), repaint.clone());
+                    std::thread::spawn(move || {
+                        std::thread::sleep(std::time::Duration::from_millis(if mock_update_has("notesslow") { 30_000 } else { 400 }));
+                        let notes = if mock_update_has("notesfail") {
+                            Notes::Failed("curl: (28) Operation timed out after 20001 milliseconds with 0 bytes received".into())
+                        } else {
+                            Notes::Ready(crate::update::parse_changelog(MOCK_CHANGELOG, crate::update::INSTALLED, &offer.version))
+                        };
+                        let mut st = s.lock().unwrap();
+                        st.update.notes = Some(notes);
+                        st.update.notes_seq += 1;
+                        drop(st);
+                        repaint();
+                    });
+                }
+                Command::InstallUpdate => {
+                    // Downloading with its progress, verifying, installing: then done, or the
+                    // checksum refused (installfail).
+                    let (s, repaint) = (s.clone(), repaint.clone());
+                    std::thread::spawn(move || {
+                        let slow = if mock_update_has("installslow") { 10 } else { 1 };
+                        let set = |i: Install| {
+                            s.lock().unwrap().update.install = Some(i);
+                            repaint();
+                        };
+                        let running = |status: &str, progress: Option<f32>| Install::Running { status: status.into(), progress };
+                        set(running("Downloading…", None));
+                        for p in 0..=20 {
+                            std::thread::sleep(std::time::Duration::from_millis(120 * slow));
+                            set(running("Downloading…", Some(p as f32 / 20.0)));
+                        }
+                        set(running("Verifying…", None));
+                        std::thread::sleep(std::time::Duration::from_millis(600 * slow));
+                        if mock_update_has("installfail") {
+                            set(Install::Failed("Invalid file checksum (ab12… expected, got 9f3c…)".into()));
+                            return;
+                        }
+                        set(running("Installing…", None));
+                        std::thread::sleep(std::time::Duration::from_millis(1500 * slow));
+                        set(Install::Done);
+                    });
+                }
+                Command::Refresh | Command::Cec { .. } | Command::CheckUpdate { .. } => {}
             }
             repaint();
         }
     });
     Backend { state, commands: tx, preview_fps: Arc::new(AtomicU32::new(0)), avr }
+}
+
+/// Installed apps for the desktop preview: more than fit in either view, most with a generated icon (some
+/// white on a coloured `iconColor`, as LG's are), one without (the generic icon shows).
+#[cfg(not(feature = "webos"))]
+fn mock_apps() -> Vec<AppInfo> {
+    let icon = |hue: [u8; 3], glyph_only: bool| {
+        let n = 96usize;
+        let mut rgba = vec![0u8; n * n * 4];
+        for y in 0..n {
+            for x in 0..n {
+                let (dx, dy) = (x as f32 - 47.5, y as f32 - 47.5);
+                let ring = (dx * dx + dy * dy).sqrt();
+                let o = (y * n + x) * 4;
+                let px = if glyph_only {
+                    // A white ring on transparent, drawn over the app's colour.
+                    if (22.0..32.0).contains(&ring) { [255, 255, 255, 255] } else { [0; 4] }
+                } else {
+                    // A full tile: a diagonal gradient with a light disc.
+                    let t = (x + y) as f32 / (2 * n) as f32;
+                    let shade = |c: u8| (c as f32 * (0.55 + 0.45 * t)) as u8;
+                    if ring < 20.0 { [245, 245, 245, 255] } else { [shade(hue[0]), shade(hue[1]), shade(hue[2]), 255] }
+                };
+                rgba[o..o + 4].copy_from_slice(&px);
+            }
+        }
+        Some(Image { width: n, height: n, rgba: Arc::new(rgba) })
+    };
+    let app = |id: &str, title: &str, color: Option<[u8; 3]>, icon: Option<Image>| AppInfo { id: id.into(), title: title.into(), params: None, color, icon };
+    let mut apps = vec![
+        app("netflix", "Netflix", None, icon([200, 20, 30], false)),
+        app("amazon", "Prime Video", Some([5, 120, 255]), icon([0; 3], true)),
+        app("youtube.leanback.v4", "YouTube", None, icon([230, 30, 30], false)),
+        app("com.disney.disneyplus-prod", "Disney+", None, icon([20, 40, 120], false)),
+        app("com.apple.appletv", "Apple TV", Some([20, 20, 20]), icon([0; 3], true)),
+        app("spotify-beehive", "Spotify", None, icon([30, 185, 84], false)),
+        app("tv.twitch.tv.starshot.lg", "Twitch", Some([145, 70, 255]), icon([0; 3], true)),
+        app("cdp-30", "Plex", None, icon([230, 160, 10], false)),
+        app("org.xbmc.kodi", "Kodi", None, None),
+        app("com.webos.app.browser", "Navigateur Web", Some([255, 255, 255]), icon([40, 110, 220], false)),
+        app("com.webos.app.mediadiscovery", "Lecteur multimédia", None, icon([90, 60, 200], false)),
+        app("org.webosbrew.hbchannel", "Homebrew Channel", Some([207, 6, 82]), icon([0; 3], true)),
+        app("com.ecklf.luma", "Luma", None, icon([40, 40, 50], false)),
+        app("arte.tv", "ARTE", None, icon([250, 90, 30], false)),
+        app("fr.francetv.webos", "france.tv", None, icon([30, 60, 200], false)),
+        app("molotov", "Molotov", None, icon([60, 60, 60], false)),
+        app("com.canalplus.app", "CANAL+", None, icon([10, 10, 10], false)),
+        app("tf1.plus", "TF1+", None, icon([20, 90, 200], false)),
+        app("m6.plus", "M6+", Some([140, 30, 200]), icon([0; 3], true)),
+        app("deezer", "Deezer", None, icon([160, 50, 220], false)),
+        app("dazn", "DAZN", None, None),
+        app("crunchyroll", "Crunchyroll", None, icon([245, 120, 30], false)),
+        app("pluto.tv", "Pluto TV", None, icon([250, 220, 30], false)),
+        app("rakuten.tv", "Rakuten TV", None, icon([200, 20, 50], false)),
+        app("com.webos.app.camera", "Caméra", Some([126, 86, 177]), icon([0; 3], true)),
+        app("com.webos.app.accessibility", "Accessibilité", None, icon([180, 99, 73], false)),
+        // A title far too long, one in a script the font lacks (its id shows), an input
+        // pinned to the home screen (a launch point with params: never ticked).
+        app("com.example.long", "A streaming service with a remarkably long name indeed", None, icon([90, 90, 160], false)),
+        app("jp.example.tv", "\u{65e5}\u{672c}\u{30c6}\u{30ec}\u{30d3}", None, icon([220, 40, 40], false)),
+        AppInfo { params: Some(serde_json::json!({"id": "uniqueId", "value": "4"})), ..app("com.webos.app.hdmi1", "Salon", Some([109, 117, 127]), icon([0; 3], true)) },
+    ];
+    apps.sort_by_key(|a| a.title.to_lowercase());
+    apps
+}
+
+/// OUTPICK_MOCK_UPDATE, a comma-separated list, simulates the update check without the
+/// network: available (a newer version remembered from an earlier opening), uptodate,
+/// error, slow (checking on opening), with notesfail / notesslow for the release notes
+/// and installfail / installslow for the install. Unset: never checked yet.
+#[cfg(not(feature = "webos"))]
+fn mock_update_has(flag: &str) -> bool {
+    std::env::var("OUTPICK_MOCK_UPDATE").is_ok_and(|v| v.split(',').any(|f| f.trim() == flag))
+}
+
+#[cfg(not(feature = "webos"))]
+const MOCK_UPDATE_ERROR: &str = "curl: (60) SSL certificate problem: unable to get local issuer certificate";
+
+#[cfg(not(feature = "webos"))]
+fn mock_update_found(u: &mut UpdateState) {
+    u.checking = false;
+    u.checked = Some(Ok(()));
+    // Two versions after this one, so the notes show both.
+    u.offer = Some(crate::update::Offer {
+        version: "0.2.2".into(),
+        ipk_url: "https://git.thoxy.xyz/thoxy/outpick/releases/download/v0.2.2/com.thoxy.outpick_0.2.2_arm.ipk".into(),
+        sha256: "ab".repeat(32),
+        size: Some(1_812_345),
+    });
+}
+
+#[cfg(not(feature = "webos"))]
+fn mock_update_start(u: &mut UpdateState) {
+    if mock_update_has("available") {
+        mock_update_found(u);
+    } else if mock_update_has("uptodate") {
+        u.checked = Some(Ok(()));
+    } else if mock_update_has("error") {
+        u.checked = Some(Err(MOCK_UPDATE_ERROR.into()));
+    } else if mock_update_has("slow") {
+        u.checking = true;
+    }
+}
+
+/// Release notes for the simulated offer, as `tools/release/changelog.py` writes them: two
+/// versions after this one (and this one, which is not shown), with an arrow the font has
+/// and an emoji it lacks.
+#[cfg(not(feature = "webos"))]
+const MOCK_CHANGELOG: &str = "## v0.2.2 — 2026-12-04
+
+### Update check every 24 h, with the release notes and install · [`1a2b3c4`](https://git.thoxy.xyz/thoxy/outpick/commit/1a2b3c4)
+
+- **Update:** once a day on opening, the Homebrew Channel feed is asked for a newer version in the background. The picker never waits for it, and closing never waits either.
+- **Customize:** General has a Check for updates switch and an Update row: checking, up to date, the version found or the error. OK on it checks now, or opens the notes of every version since yours.
+- **Install:** OK on the Update screen hands the package to the Homebrew Channel, which checks its sha256 \u{1f512} and installs it; the screen follows its progress → done.
+
+### Apps list: icons load faster on webOS 6 · [`5d6e7f8`](https://git.thoxy.xyz/thoxy/outpick/commit/5d6e7f8)
+
+- **Apps:** root's copies of the icons are made once per icon change instead of at every opening.
+
+## v0.2.1 — 2026-11-20
+
+### Receiver: the volume shows while it changes · [`9a8b7c6`](https://git.thoxy.xyz/thoxy/outpick/commit/9a8b7c6)
+
+- **Receiver:** the volume and mute shown in the options follow the remote's keys at once, and the receiver's own answer a moment later.
+- **Fix:** a receiver that took longer than 2 s to answer was dropped as unreachable; it now gets 4 s, as `denon::select` already did.
+
+### Clock: seconds without drift · [`3c2d1e0`](https://git.thoxy.xyz/thoxy/outpick/commit/3c2d1e0)
+
+- **Clock:** the seconds tick on the second, not a quarter second late.
+- **Tests:** 9 more, with the notes parser and the feed checks run on the published repo.json.
+
+### Sources: rename from the options, the TV's name back with an empty field · [`7e6f5a4`](https://git.thoxy.xyz/thoxy/outpick/commit/7e6f5a4)
+
+- **Sources:** the options of an input open its rename field directly; validating an empty field gives the input its TV name back.
+- **Keyboard:** LG's on-screen keyboard opens with the current name selected, so typing replaces it.
+- **Layout:** a long name is cut with an ellipsis on its tile instead of running over the next one.
+
+**Full changelog:** [v0.2.0...v0.2.1](https://git.thoxy.xyz/thoxy/outpick/compare/v0.2.0...v0.2.1)
+
+## v0.2.0 — 2026-11-13
+
+### Already installed: not shown · [`95f3782`](https://git.thoxy.xyz/thoxy/outpick/commit/95f3782)
+";
+
+/// What the simulated receiver does with a command: its sound mode, volume and mute change
+/// here, nothing goes to the network.
+#[cfg(not(feature = "webos"))]
+fn mock_avr_key(avr: &mut crate::denon::AvrState, cmd: &str) {
+    use crate::denon::{MUTE_OFF, MUTE_ON, VOLUME_DOWN, VOLUME_UP};
+    // 1.0 per press, as `denon::send` sends two 0.5 steps.
+    let step = |avr: &mut crate::denon::AvrState, d: f32| avr.volume = avr.volume.map(|v| (v + d).clamp(0.0, 98.0));
+    match cmd {
+        VOLUME_UP => step(avr, 1.0),
+        VOLUME_DOWN => step(avr, -1.0),
+        MUTE_ON => avr.muted = Some(true),
+        MUTE_OFF => avr.muted = Some(false),
+        _ => {
+            if let Some(mode) = cmd.strip_prefix("MS") {
+                avr.sound = Some(mode.to_string());
+            }
+        }
+    }
+}
+
+/// A Denon behind HDMI 2 for the desktop preview (OUTPICK_MOCK_AVR), with a second one on
+/// the network so the choice shows too.
+#[cfg(not(feature = "webos"))]
+fn mock_avr() -> crate::denon::AvrState {
+    use crate::denon::{AvrInput, AvrState, Protocol, Receiver, Status};
+    let rx = |name: &str, model: &str, ip: &str, mac: &str| Receiver {
+        ip: ip.into(),
+        port: 80,
+        mac: mac.into(),
+        model: model.into(),
+        name: name.into(),
+        brand: "Denon".into(),
+        power: Some(true),
+    };
+    let main = rx("Denon AVC-S660H", "AVC-S660H", "192.168.1.42", "0006780A1B2C");
+    let input = |code: &str, name: &str| AvrInput { code: code.into(), name: name.into() };
+    AvrState {
+        status: Status::Ready,
+        found: vec![main.clone(), rx("Salon", "AVR-X1700H", "192.168.1.57", "0006780A9F31")],
+        auto_pick: Some(main.mac.clone()),
+        device: Some(main),
+        tv_input: Some("HDMI_2".into()),
+        power: Some(true),
+        input: Some("GAME".into()),
+        inputs: vec![
+            input("SAT/CBL", "Freebox"),
+            input("MPLAY", "Apple TV"),
+            input("GAME", "PlayStation 5"),
+            input("BD", "Blu-ray"),
+            input("TV", "TV Audio"),
+        ],
+        sound: Some("Dolby PLII Movie".into()),
+        volume: Some(45.5),
+        muted: Some(false),
+        protocol: Protocol::Auto,
+        link: Some(Protocol::Http),
+    }
 }
 
 #[cfg(test)]
@@ -693,6 +1351,281 @@ mod tests {
         let (w, h, px) = decode_bmp(&bmp(2, -2, 32, &[top, bottom])).unwrap();
         assert_eq!((w, h), (2, 2));
         assert_eq!(px, [RED, GREEN, BLUE, WHITE].concat());
+    }
+
+    #[test]
+    fn bmp_complete_wants_the_whole_file() {
+        let row: &[u8] = &[0, 0, 255, 0, 255, 0, 0, 0];
+        let whole = bmp(2, -2, 24, &[row, row]);
+        assert!(bmp_complete(&whole));
+        // Answered before the service finished writing: rows missing.
+        assert!(!bmp_complete(&whole[..whole.len() - 3]));
+        assert!(!bmp_complete(&whole[..30]));
+        assert!(!bmp_complete(&[]));
+        // A header claiming more than is there, or less.
+        let mut long = whole.clone();
+        long.extend([0; 8]);
+        assert!(!bmp_complete(&long));
+    }
+
+    /// A 320×180 RGBA frame from a pixel function.
+    fn frame(f: impl Fn(usize, usize) -> [u8; 3]) -> Vec<u8> {
+        (0..180).flat_map(|y| (0..320).map(move |x| (x, y))).flat_map(|(x, y)| {
+            let [r, g, b] = f(x, y);
+            [r, g, b, 255]
+        }).collect()
+    }
+
+    #[test]
+    fn blank_frames() {
+        assert!(frame_blank(&frame(|_, _| [0, 0, 0])));
+        assert!(frame_blank(&frame(|x, y| [((x + y) % 3) as u8 + 4, 4, 6]))); // black with noise
+        assert!(frame_blank(&frame(|_, _| [16, 32, 160]))); // a flat blue "no signal"
+        assert!(frame_blank(&frame(|x, _| if x < 4 { [255; 3] } else { [0; 3] }))); // black but a line
+        assert!(frame_blank(&[]));
+        // A picture, even a dark one with black bars.
+        assert!(!frame_blank(&frame(|x, y| [(x % 256) as u8, y as u8, 90])));
+        assert!(!frame_blank(&frame(|x, y| if !(23..157).contains(&y) { [0; 3] } else { [(x / 4) as u8 + 10, 30, 40] })));
+    }
+
+    fn front(app: &str, since: Instant) -> Front {
+        Front::new(Some(app.into()), since)
+    }
+
+    #[test]
+    fn front_since_moves_only_on_a_change() {
+        let t = Instant::now();
+        let mut f = Front::new(None, t);
+        // Learning what is in front is not a switch.
+        assert!(f.observe(Some("com.webos.app.hdmi1".into()), t));
+        assert!(f.first);
+        assert!(!f.observe(Some("com.webos.app.hdmi1".into()), t + Duration::from_secs(1)));
+        assert_eq!(f.since, t);
+        assert!(f.observe(Some("com.webos.app.hdmi2".into()), t + Duration::from_secs(2)));
+        assert_eq!((f.app.as_deref(), f.since, f.first), (Some("com.webos.app.hdmi2"), t + Duration::from_secs(2), false));
+        assert_eq!(f.keep_after(), PREVIEW_KEEP);
+    }
+
+    #[test]
+    fn frames_go_only_to_the_input_steadily_in_front() {
+        let ms = Duration::from_millis;
+        let t = Instant::now();
+        let hdmi1 = front("com.webos.app.hdmi1", t);
+        let mut switched = hdmi1.clone();
+        switched.first = false;
+        // There when the picker opened: remembered soon; switched to: only after a while.
+        assert_eq!(judge_frame(&hdmi1, &hdmi1, t + ms(900), None, false, false), Verdict::Keep);
+        assert_eq!(judge_frame(&hdmi1, &hdmi1, t + ms(600), None, false, false), Verdict::Show);
+        assert_eq!(judge_frame(&switched, &switched, t + ms(1500), None, false, false), Verdict::Show);
+        assert_eq!(judge_frame(&switched, &switched, t + ms(2100), None, false, false), Verdict::Keep);
+        // Just switched (or just opened): the picture may be black or the old input's.
+        assert_eq!(judge_frame(&hdmi1, &hdmi1, t + ms(150), None, false, false), Verdict::Reject("settling"));
+        // The HDMI input reported while the capture ran, or there and back.
+        let live = front("com.webos.app.livetv", t);
+        let after = front("com.webos.app.hdmi1", t + ms(2600));
+        assert_eq!(judge_frame(&live, &after, t + ms(2500), None, false, false), Verdict::Reject("input changed"));
+        let back = front("com.webos.app.livetv", t + ms(2700));
+        assert_eq!(judge_frame(&live, &back, t + ms(2500), None, false, false), Verdict::Reject("input changed"));
+        // A launch sent: the app in front is about to change, reported late.
+        assert_eq!(judge_frame(&hdmi1, &hdmi1, t + ms(5000), Some(t + ms(4900)), false, false), Verdict::Reject("switching"));
+        assert_eq!(judge_frame(&hdmi1, &hdmi1, t + ms(5000), Some(t + ms(5010)), false, false), Verdict::Reject("switching"));
+        // One from before this input came in front is no matter.
+        assert_eq!(judge_frame(&switched, &switched, t + ms(5000), Some(t - ms(1)), false, false), Verdict::Keep);
+        assert_eq!(judge_frame(&hdmi1, &hdmi1, t + ms(5000), None, true, false), Verdict::Reject("closing"));
+        // Black: the last good picture stays.
+        assert_eq!(judge_frame(&hdmi1, &hdmi1, t + ms(5000), None, false, true), Verdict::Reject("blank"));
+        let none = Front::new(None, t);
+        assert_eq!(judge_frame(&none, &none, t + ms(5000), None, false, false), Verdict::Reject("nothing in front"));
+    }
+
+    #[test]
+    fn kept_frames_wait_to_be_confirmed() {
+        let ms = Duration::from_millis;
+        let t = Instant::now();
+        let hdmi1 = front("com.webos.app.hdmi1", t);
+        let done = t + ms(3000);
+        assert_eq!(pending_fate(&hdmi1, done, &hdmi1, done + ms(200), None, false), Fate::Wait);
+        assert_eq!(pending_fate(&hdmi1, done, &hdmi1, done + ms(500), None, false), Fate::Save);
+        // Closing with nothing launched yet: the input was still showing.
+        assert_eq!(pending_fate(&hdmi1, done, &hdmi1, done + ms(100), None, true), Fate::Save);
+        // Picked just after the frame: it showed the input being left.
+        let hdmi2 = front("com.webos.app.hdmi2", done + ms(400));
+        assert_eq!(pending_fate(&hdmi1, done, &hdmi2, done + ms(400), Some(done + ms(50)), false), Fate::Save);
+        // A launch before the frame came back: it may show the switch.
+        assert_eq!(pending_fate(&hdmi1, done, &hdmi1, done + ms(100), Some(done - ms(10)), true), Fate::Save);
+        assert_eq!(pending_fate(&hdmi1, done, &hdmi2, done + ms(400), Some(done - ms(10)), false), Fate::Drop);
+        // Switched from elsewhere, reported just after the frame: it may already show the new input.
+        assert_eq!(pending_fate(&hdmi1, done, &hdmi2, done + ms(600), None, false), Fate::Drop);
+        // Gone and back: not the same stretch in front.
+        let mut again = front("com.webos.app.hdmi1", done + ms(300));
+        again.first = false;
+        assert_eq!(pending_fate(&hdmi1, done, &again, done + ms(900), None, false), Fate::Drop);
+    }
+
+    /// The preview loop's bookkeeping over a session, in ms since the process started:
+    /// what the TV reports in front from when, when a launch is sent and when the picker
+    /// closes. Pictures are asked for every `period` ms (and when the input's keep time
+    /// comes), back 30 ms later. Returns the pictures remembered: (app, asked at).
+    fn session(fronts: &[(u64, &str)], period: u64, launch: Option<u64>, close: u64) -> Vec<(String, u64)> {
+        let t0 = Instant::now();
+        let at = |ms: u64| t0 + Duration::from_millis(ms);
+        let app_at = |ms: u64| fronts.iter().rev().find(|(m, _)| *m <= ms).map(|(_, a)| a.to_string());
+        let launch_by = |ms: u64| launch.filter(|l| *l <= ms).map(at);
+        let mut front = Front::new(None, t0);
+        let mut pending: Option<(Front, u64, u64)> = None;
+        let mut saved = Vec::new();
+        let (mut ms, mut next) = (0, 0);
+        loop {
+            let closing = ms >= close;
+            front.observe(app_at(ms), at(ms));
+            if let Some((f, asked, done)) = pending.clone() {
+                match pending_fate(&f, at(done), &front, at(ms), launch_by(ms), closing) {
+                    Fate::Save => {
+                        saved.push((f.app.unwrap(), asked));
+                        pending = None;
+                    }
+                    Fate::Drop => pending = None,
+                    Fate::Wait => {}
+                }
+            }
+            if closing {
+                return saved;
+            }
+            if ms >= next {
+                let before = front.clone();
+                let keep_at = before.since + before.keep_after();
+                next = ms + period;
+                if at(ms) < keep_at {
+                    next = next.min(keep_at.duration_since(t0).as_millis() as u64);
+                }
+                let done = ms + 30;
+                let mut seen = front.clone();
+                seen.observe(app_at(done), at(done));
+                let verdict = judge_frame(&before, &seen, at(ms), launch_by(done), done >= close, false);
+                if verdict == Verdict::Keep && pending.is_none() {
+                    pending = Some((before, ms, done));
+                }
+                ms = done;
+            } else {
+                ms += 10;
+            }
+        }
+    }
+
+    #[test]
+    fn open_and_pick_keeps_the_input_left() {
+        let hdmi1 = [(200, "com.webos.app.hdmi1")];
+        // In front when the picker opened (known at 200 ms), picked 1.2 s later: its picture
+        // is refreshed, from before the pick, at any rate.
+        for period in [250, 500, 1000] {
+            let kept = session(&hdmi1, period, Some(1400), 1400);
+            assert!(!kept.is_empty(), "{period}");
+            assert!(kept.iter().all(|(app, asked)| app == "com.webos.app.hdmi1" && *asked >= 1000 && *asked + 30 <= 1400));
+        }
+        // Picked after 0.5 s: too soon to trust what the TV reports.
+        assert!(session(&hdmi1, 250, Some(700), 700).is_empty());
+        // Closed without a pick after a while: kept too.
+        assert!(!session(&hdmi1, 250, None, 1500).is_empty());
+    }
+
+    #[test]
+    fn the_early_live_tv_report_files_nothing() {
+        // Live TV first, corrected to the HDMI input 500 ms later, picked at 3 s.
+        let fronts = [(200, "com.webos.app.livetv"), (700, "com.webos.app.hdmi1")];
+        for period in [250, 1000] {
+            let kept = session(&fronts, period, Some(3000), 3000);
+            assert!(kept.iter().all(|(app, _)| app == "com.webos.app.hdmi1"), "{kept:?}");
+            // The correction is a change: the HDMI input waits its 2 s.
+            assert!(kept.iter().all(|(_, asked)| *asked >= 2700));
+        }
+    }
+
+    #[test]
+    fn nothing_after_a_launch_and_two_seconds_after_a_switch() {
+        // A switch sent from the picker at 3 s (a receiver's input), reported at 3.6 s;
+        // the picker stays open until 8 s.
+        let fronts = [(200, "com.webos.app.hdmi1"), (3600, "com.webos.app.hdmi2")];
+        let kept = session(&fronts, 250, Some(3000), 8000);
+        assert!(kept.iter().any(|(app, _)| app == "com.webos.app.hdmi1"));
+        assert!(kept.iter().any(|(app, _)| app == "com.webos.app.hdmi2"));
+        for (app, asked) in &kept {
+            if app == "com.webos.app.hdmi1" {
+                assert!(asked + 30 <= 3000, "{asked}");
+            } else {
+                assert!(*asked >= 5600, "{asked}");
+            }
+        }
+        // Switched from elsewhere (no launch here): a frame not yet confirmed is dropped.
+        let kept = session(&fronts, 250, None, 8000);
+        assert!(kept.iter().all(|(app, asked)| app == "com.webos.app.hdmi2" || asked + 30 + 500 <= 3600));
+    }
+
+    #[cfg(any(feature = "desktop", feature = "webos"))]
+    /// A 2×1 PNG of `color` and `depth` from raw sample bytes (with a palette and its
+    /// transparency for indexed ones).
+    fn png(color: png::ColorType, depth: png::BitDepth, data: &[u8], palette: Option<(&[u8], &[u8])>) -> Vec<u8> {
+        let mut out = Vec::new();
+        let mut enc = png::Encoder::new(&mut out, 2, 1);
+        enc.set_color(color);
+        enc.set_depth(depth);
+        if let Some((rgb, alpha)) = palette {
+            enc.set_palette(rgb.to_vec());
+            enc.set_trns(alpha.to_vec());
+        }
+        enc.write_header().unwrap().write_image_data(data).unwrap();
+        out
+    }
+
+    #[cfg(any(feature = "desktop", feature = "webos"))]
+    #[test]
+    fn png_every_kind_becomes_rgba() {
+        use png::{BitDepth::*, ColorType::*};
+        let rgba = |b: &[u8]| decode_png(b, 512).map(|i| ((i.width, i.height), i.rgba.to_vec()));
+        let want = |px: [[u8; 4]; 2]| Some(((2, 1), px.concat()));
+        assert_eq!(rgba(&png(Rgba, Eight, &[255, 0, 0, 255, 0, 0, 255, 128], None)), want([RED, [0, 0, 255, 128]]));
+        assert_eq!(rgba(&png(Rgb, Eight, &[255, 0, 0, 0, 255, 0], None)), want([RED, GREEN]));
+        assert_eq!(rgba(&png(Grayscale, Eight, &[0, 255], None)), want([[0, 0, 0, 255], WHITE]));
+        assert_eq!(rgba(&png(GrayscaleAlpha, Eight, &[10, 0, 200, 255], None)), want([[10, 10, 10, 0], [200, 200, 200, 255]]));
+        // 16-bit samples keep their high byte.
+        assert_eq!(rgba(&png(Rgb, Sixteen, &[255, 9, 0, 0, 0, 0, 0, 0, 0, 0, 255, 9], None)), want([RED, BLUE]));
+        // A palette, its second entry transparent.
+        let pal = png(Indexed, Eight, &[1, 0], Some((&[0, 255, 0, 255, 0, 0], &[255, 0])));
+        assert_eq!(rgba(&pal), want([[255, 0, 0, 0], GREEN]));
+        // A 2-bit palette: indexes 1 then 0, packed from the high bits.
+        let pal2 = png(Indexed, Two, &[0b0100_0000], Some((&[0, 0, 255, 255, 255, 255], &[255, 255])));
+        assert_eq!(rgba(&pal2), want([WHITE, BLUE]));
+    }
+
+    #[test]
+    fn shrink_averages_blocks() {
+        let img = |w: usize, h: usize, px: Vec<[u8; 4]>| Image { width: w, height: h, rgba: Arc::new(px.concat()) };
+        // Fits: as it is.
+        let small = shrink(img(2, 1, vec![RED, GREEN]), 2);
+        assert_eq!((small.width, small.height), (2, 1));
+        // 4×2 to 2×1: each 2×2 block averaged, a transparent pixel not darkening its block.
+        let clear = [0, 0, 0, 0];
+        let s = shrink(img(4, 2, vec![RED, RED, WHITE, clear, RED, RED, WHITE, WHITE]), 2);
+        assert_eq!((s.width, s.height), (2, 1));
+        assert_eq!(*s.rgba, [[255, 0, 0, 255], [255, 255, 255, 191]].concat());
+        // Uneven sides round up: 3×1 into 1 side of 2 → 2×1, the last block narrower.
+        let s = shrink(img(3, 1, vec![RED, BLUE, GREEN]), 2);
+        assert_eq!((s.width, s.height), (2, 1));
+        assert_eq!(*s.rgba, [[127, 0, 127, 255], GREEN].concat());
+        // A huge one ends within the bound.
+        let big = shrink(img(300, 1, vec![WHITE; 300]), 96);
+        assert!(big.width <= 96 && big.height == 1);
+    }
+
+    #[cfg(any(feature = "desktop", feature = "webos"))]
+    #[test]
+    fn png_too_big_or_not_png_is_none() {
+        let small = png(png::ColorType::Rgb, png::BitDepth::Eight, &[0; 6], None);
+        assert!(decode_png(&small, 2).is_some());
+        assert!(decode_png(&small, 1).is_none());
+        assert!(decode_png(&small[..small.len() - 20], 512).is_none());
+        assert!(decode_png(b"GIF89a", 512).is_none());
+        assert!(decode_png(&bmp(2, 2, 24, &[&[0; 8], &[0; 8]]), 512).is_none());
+        assert!(decode_png(&[], 512).is_none());
     }
 
     #[test]

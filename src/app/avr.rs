@@ -2,7 +2,7 @@
 //! typed by hand), and the address field.
 
 use super::settings::Item;
-use super::widgets::fit;
+use super::widgets::{HELP_H, fit, walk};
 use super::{App, Hit, Nav, Screen};
 use crate::denon::{Protocol, Status, input_of_model, parse_address};
 use crate::i18n::{t, tf};
@@ -70,8 +70,9 @@ impl App {
         let n = list.len();
         sel = sel.min(n - 1);
         match k {
-            Nav::Up => sel = (sel + n - 1) % n,
-            Nav::Down => sel = (sel + 1) % n,
+            Nav::Up => sel = walk(sel, n, -1, self.held),
+            Nav::Down => sel = walk(sel, n, 1, self.held),
+            Nav::Left if self.held => {}
             Nav::Ok => {
                 match list[sel] {
                     Row::Auto => {
@@ -174,7 +175,7 @@ impl App {
         let rect = Rect::from_min_size(pos2(screen.center().x - width / 2.0, screen.max.y - 40.0 * s - 132.0 * s), vec2(width, 132.0 * s));
         self.panel(p, rect, alpha);
         let name = st.avr.device.as_ref().map(|d| d.name.as_str()).unwrap_or("");
-        self.header(p, rect, t("avr.menu_title"), name, alpha);
+        self.header(p, rect, None, t("avr.menu_title"), name, alpha);
         self.footer(p, rect, &hints, alpha);
     }
 
@@ -188,7 +189,8 @@ impl App {
         let head = pad + 38.0 * s + 18.0 * s;
         let row_h = 74.0 * s;
         let foot = 72.0 * s;
-        let want = vec2(860.0 * s, head + list.len() as f32 * row_h + foot);
+        let help_h = HELP_H * s;
+        let want = vec2(860.0 * s, head + list.len() as f32 * row_h + help_h + foot);
         let rect = self.panel_rect(screen, want).translate(offset);
         self.panel(p, rect, alpha);
         let subtitle = match (st.avr.status, st.avr.found.len()) {
@@ -197,9 +199,9 @@ impl App {
             (_, 1) => t("avr.found_one").to_string(),
             (_, n) => tf("avr.found", &[("n", &n.to_string())]),
         };
-        self.header(p, rect, t("avr.title"), &subtitle, alpha);
+        self.header(p, rect, None, t("avr.title"), &subtitle, alpha);
 
-        let area = Rect::from_min_max(pos2(rect.min.x + pad * 0.6, rect.min.y + head), pos2(rect.max.x - pad * 0.6, rect.max.y - foot));
+        let area = Rect::from_min_max(pos2(rect.min.x + pad * 0.6, rect.min.y + head), pos2(rect.max.x - pad * 0.6, rect.max.y - foot - help_h));
         let visible = (area.height() / row_h).floor().max(1.0) as usize;
         let first = super::widgets::keep_visible(sel, visible, list.len());
         let clip = p.with_clip_rect(area.expand2(vec2(6.0 * s, 0.0)));
@@ -249,6 +251,14 @@ impl App {
                 icons::paint(&clip, "check", cr, veil(if selected { k.accent_text } else { k.accent }, alpha));
             }
         }
+        // What the selected row does; with none found, what to check first.
+        let help = match list[sel] {
+            _ if st.avr.found.is_empty() && st.avr.status != Status::Searching => "help.avr_pick_none",
+            Row::Auto => "help.avr_pick_auto",
+            Row::Found(_) => "help.avr_pick_found",
+            Row::Typed => "help.avr_pick_typed",
+        };
+        self.help_line(p, Rect::from_min_max(pos2(area.min.x, area.max.y), pos2(area.max.x, area.max.y + help_h)), t(help), alpha);
         self.footer(p, rect, &[("▲ ▼", t("hint.choose")), (t("key.ok"), t("hint.confirm")), (t("key.back"), t("hint.back"))], alpha);
     }
 }

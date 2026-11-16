@@ -119,6 +119,10 @@ pub struct AvrState {
     pub inputs: Vec<AvrInput>,
     /// Its sound mode as it shows it ("Dolby PLII Movie").
     pub sound: Option<String>,
+    /// Its main zone's volume as its display shows it (0 to 98, in 0.5 steps), and whether
+    /// it is muted; None when it does not say (its buttons are then not offered).
+    pub volume: Option<f32>,
+    pub muted: Option<bool>,
     /// The protocol set in Customize, and the one that answered last (Http or Telnet).
     pub protocol: Protocol,
     pub link: Option<Protocol>,
@@ -186,6 +190,8 @@ pub struct Report {
     /// All inputs in use (audio ones too), as (code, name).
     pub inputs: Vec<AvrInput>,
     pub sound: Option<String>,
+    pub volume: Option<f32>,
+    pub muted: Option<bool>,
 }
 
 /// The status requests (the receivers take at most 5 commands per request, and answer
@@ -205,6 +211,52 @@ const NAMES_REQUEST: &str = concat!(
     "<cmd id=\"1\">GetDeletedSource</cmd>\n",
     "</tx>\n"
 );
+/// Volume and mute have their own request: their answers' `<zone1>` would read as power in
+/// `parse_report`.
+const VOLUME_REQUEST: &str = concat!(
+    "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n<tx>\n",
+    "<cmd id=\"1\">GetVolumeLevel</cmd>\n",
+    "<cmd id=\"1\">GetMuteStatus</cmd>\n",
+    "</tx>\n"
+);
+
+/// A volume as the receiver's display shows it, when it is one (0 to 98).
+fn displayed(v: f32) -> Option<f32> {
+    (0.0..=98.0).contains(&v).then_some(v)
+}
+
+/// The main zone's volume (as displayed) and mute from the answer to `VOLUME_REQUEST`.
+/// `<volume>` is in dB relative to the reference level (-80 to +18): displayed = dB + 80.
+pub fn parse_volume(xml: &str) -> (Option<f32>, Option<bool>) {
+    let (mut volume, mut muted) = (None, None);
+    for cmd in xml.split("<cmd>").skip(1) {
+        let zone = tag(cmd, "zone1").unwrap_or(cmd);
+        if let Some(v) = tag(zone, "volume") {
+            volume = v.trim_end_matches("dB").trim().parse::<f32>().ok().and_then(|db| displayed(db + 80.0));
+        }
+        if let Some(m) = tag(zone, "mute") {
+            muted = match m.to_ascii_lowercase().as_str() {
+                "on" => Some(true),
+                "off" => Some(false),
+                _ => None,
+            };
+        }
+    }
+    (volume, muted)
+}
+
+/// A telnet volume ("45", or "455" for 45.5) as displayed.
+fn telnet_volume(v: &str) -> Option<f32> {
+    if !v.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    let n: f32 = v.parse().ok()?;
+    displayed(match v.len() {
+        2 => n,
+        3 => n / 10.0,
+        _ => return None,
+    })
+}
 
 pub fn parse_report(xml: &str) -> Report {
     let mut r = Report::default();
@@ -249,8 +301,9 @@ pub fn parse_report(xml: &str) -> Report {
     r
 }
 
-/// What telnet answers to `PW?`, `SI?`, `SSFUN ?`, `SSSOD ?` and `NSFRN ?`, as one report.
-/// Lines: "PWON", "SIGAME", "SSFUNSAT/CBL Freebox Player", "SSSODBD DEL", "NSFRN Denon …".
+/// What telnet answers to `PW?`, `SI?`, `MV?`, `MU?`, `SSFUN ?`, `SSSOD ?` and `NSFRN ?`, as
+/// one report. Lines: "PWON", "SIGAME", "MV455", "MUOFF", "SSFUNSAT/CBL Freebox Player",
+/// "SSSODBD DEL", "NSFRN Denon …".
 pub fn parse_telnet(text: &str) -> Report {
     let mut r = Report::default();
     let mut renamed: Vec<(String, String)> = Vec::new();
@@ -278,6 +331,17 @@ pub fn parse_telnet(text: &str) -> Report {
         } else if let Some(rest) = line.strip_prefix("SSSOD") {
             if let Some((code, "DEL")) = rest.split_once(' ').map(|(c, u)| (c, u.trim())) {
                 unused.push(code.to_string());
+            }
+        } else if let Some(v) = line.strip_prefix("MV") {
+            // "MVMAX 98" is the most it may be set to, not its level.
+            if let Some(v) = telnet_volume(v.trim()) {
+                r.volume = Some(v);
+            }
+        } else if let Some(m) = line.strip_prefix("MU") {
+            match m {
+                "ON" => r.muted = Some(true),
+                "OFF" => r.muted = Some(false),
+                _ => {}
             }
         } else if let Some(mode) = line.strip_prefix("MS") {
             r.sound = Some(mode.trim().to_string()).filter(|m| !m.is_empty());
@@ -611,7 +675,8 @@ fn telnet(ip: &str, cmds: &[&str], done: impl Fn(&str) -> bool) -> Result<String
 }
 
 fn telnet_report(r: &Receiver) -> Result<Report, String> {
-    let text = telnet(&r.ip, &["PW?", "ZM?", "SI?", "MS?", "SSFUN ?", "SSSOD ?", "NSFRN ?"], |t| {
+    // MV? and MU? before the lists, so they are answered before the lists' END that ends the read.
+    let text = telnet(&r.ip, &["PW?", "ZM?", "SI?", "MS?", "MV?", "MU?", "SSFUN ?", "SSSOD ?", "NSFRN ?"], |t| {
         t.contains("SI") && t.contains("SSFUN END") && t.contains("SSSOD END") && t.contains("NSFRN")
     })?;
     let mut rep = parse_telnet(&text);
@@ -634,7 +699,12 @@ fn report(r: &Receiver, p: Protocol) -> Result<(Report, Protocol), String> {
         if status.contains("<error>") || names.contains("<error>") {
             return Err("AppCommand refused".into());
         }
-        Ok((parse_report(&format!("{status}{names}")), Protocol::Http))
+        let mut rep = parse_report(&format!("{status}{names}"));
+        // Without it the rest still stands: no volume, that is all.
+        if let Ok((v, m)) = http_volume(r) {
+            (rep.volume, rep.muted) = (v, m);
+        }
+        Ok((rep, Protocol::Http))
     };
     match p {
         Protocol::Http => http_report(),
@@ -642,6 +712,33 @@ fn report(r: &Receiver, p: Protocol) -> Result<(Report, Protocol), String> {
         Protocol::Auto => http_report().or_else(|e| telnet_report(r).map(|x| (x, Protocol::Telnet)).map_err(|t| format!("{e}; {t}"))),
     }
 }
+
+fn http_volume(r: &Receiver) -> Result<(Option<f32>, Option<bool>), String> {
+    let xml = http(&r.ip, r.port, "POST", "/goform/AppCommand.xml", Some(VOLUME_REQUEST))?;
+    if xml.contains("<error>") {
+        return Err("AppCommand refused".into());
+    }
+    Ok(parse_volume(&xml))
+}
+
+/// The volume and mute alone, over the protocol that answered last.
+fn volume_report(r: &Receiver, p: Protocol) -> Result<(Option<f32>, Option<bool>), String> {
+    let over_telnet = || {
+        let text = telnet(&r.ip, &["MV?", "MU?"], |t| t.contains("MV") && t.contains("MU"))?;
+        let rep = parse_telnet(&text);
+        Ok((rep.volume, rep.muted))
+    };
+    match p {
+        Protocol::Telnet => over_telnet(),
+        _ => http_volume(r).or_else(|e| if p == Protocol::Auto { over_telnet().map_err(|t: String| format!("{e}; {t}")) } else { Err(e) }),
+    }
+}
+
+/// The volume keys: relative steps only, so a misread level can never be sent back louder.
+pub const VOLUME_UP: &str = "MVUP";
+pub const VOLUME_DOWN: &str = "MVDOWN";
+pub const MUTE_ON: &str = "MUON";
+pub const MUTE_OFF: &str = "MUOFF";
 
 /// The HTTP path that passes telnet command `cmd` on: spaces encoded ("MNMEN ON" sent raw
 /// breaks the request line, and the receiver answers 400).
@@ -817,6 +914,11 @@ pub struct Handle {
 }
 
 impl Handle {
+    /// A handle with no worker behind it (the desktop preview's simulated receiver).
+    #[cfg(not(feature = "webos"))]
+    pub fn detached() -> Handle {
+        Handle { tx: mpsc::channel().0 }
+    }
     pub fn configure(&self, c: AvrConfig) {
         let _ = self.tx.send(Msg::Config(c));
     }
@@ -933,6 +1035,7 @@ fn worker(state: Shared, rx: mpsc::Receiver<Msg>, repaint: impl Fn()) {
                     a.power = r.power;
                     a.input = r.input.clone();
                     a.sound = r.sound.clone();
+                    (a.volume, a.muted) = (r.volume, r.muted);
                     if !inputs.is_empty() {
                         a.inputs = inputs.clone();
                     }
@@ -1013,6 +1116,7 @@ fn worker(state: Shared, rx: mpsc::Receiver<Msg>, repaint: impl Fn()) {
                 a.power = None;
                 a.input = None;
                 a.sound = None;
+                (a.volume, a.muted) = (None, None);
                 if a.status == Status::Searching {
                     a.status = Status::NotFound;
                 }
@@ -1039,6 +1143,7 @@ fn worker(state: Shared, rx: mpsc::Receiver<Msg>, repaint: impl Fn()) {
                 a.power = None;
                 a.input = None;
                 a.sound = None;
+                (a.volume, a.muted) = (None, None);
                 a.tv_input = None;
             }
         });
@@ -1067,6 +1172,9 @@ fn worker(state: Shared, rx: mpsc::Receiver<Msg>, repaint: impl Fn()) {
                         a.power = r.power;
                         a.input = r.input.clone();
                         a.sound = r.sound.clone();
+                        // A volume answer lost once keeps the last one (its buttons stay put).
+                        a.volume = r.volume.or(a.volume);
+                        a.muted = r.muted.or(a.muted);
                         if !inputs.is_empty() {
                             a.inputs = inputs.clone();
                         }
@@ -1133,9 +1241,27 @@ pub fn send(state: &Shared, cmd: &str) {
         eprintln!("avr: no receiver for {cmd}");
         return;
     };
-    if let Err(e) = command(&device, link, cmd) {
-        eprintln!("avr {cmd}: {e}");
-        return;
+    // − and + move it by 1.0: two of the receiver's 0.5 steps, a moment apart so the
+    // second is not dropped.
+    let times = if cmd == VOLUME_UP || cmd == VOLUME_DOWN { 2 } else { 1 };
+    for i in 0..times {
+        if i > 0 {
+            std::thread::sleep(Duration::from_millis(150));
+        }
+        if let Err(e) = command(&device, link, cmd) {
+            eprintln!("avr {cmd}: {e}");
+            return;
+        }
+    }
+    // The volume shows at once too.
+    if cmd.starts_with("MV") || cmd.starts_with("MU") {
+        std::thread::sleep(Duration::from_millis(300));
+        if let Ok((volume, muted)) = volume_report(&device, link)
+            && let Ok(mut st) = state.lock()
+        {
+            st.avr.volume = volume.or(st.avr.volume);
+            st.avr.muted = muted.or(st.avr.muted);
+        }
     }
     // A sound mode change shows at once, not at the next poll.
     if cmd.starts_with("MS") {
@@ -1392,6 +1518,33 @@ mod tests {
         let r = parse_report(&format!("{status}<rx>{names}</rx>"));
         assert_eq!((r.power, r.input.as_deref(), r.sound.as_deref()), (Some(true), Some("MPLAY"), Some("Dolby PLII Movie")));
         assert!(r.inputs.iter().any(|i| i.code == "MPLAY" && i.name == "Media Player"));
+    }
+
+    #[test]
+    fn volume_answers() {
+        // As the S660H answers: no zone, -34.0 dB shown as 46.0.
+        assert_eq!(parse_volume(&fixture("s660-Volume.xml")), (Some(46.0), Some(false)));
+        // As others are documented to: dB relative to the reference, per zone.
+        let xml = "<rx><cmd><zone1><volume>-34.5</volume></zone1><zone2><volume>-40.0</volume></zone2></cmd>\
+                   <cmd><zone1><mute>on</mute></zone1><zone2><mute>off</mute></zone2></cmd></rx>";
+        assert_eq!(parse_volume(xml), (Some(45.5), Some(true)));
+        assert_eq!(parse_volume("<rx><cmd><zone1><mute>off</mute></zone1></cmd></rx>"), (None, Some(false)));
+        // Nonsense stays unknown rather than a level.
+        assert_eq!(parse_volume("<rx><cmd><zone1><volume>--</volume></zone1></cmd></rx>"), (None, None));
+        assert_eq!(parse_volume("<rx><cmd><zone1><volume>40.0</volume></zone1></cmd></rx>"), (None, None));
+        assert_eq!(parse_volume("<error>1</error>"), (None, None));
+        // The volume answer's zone1 is not power: it never goes through parse_report.
+        assert_eq!(parse_report(&fixture("s660-AppCommand.xml")).volume, None);
+
+        // Over telnet: two digits, or three for a half step; MVMAX is the limit, not the level.
+        assert_eq!(parse_telnet("MV46\rMVMAX 88\rMUOFF\r").volume, Some(46.0)); // the S660H's answer
+        let r = parse_telnet("PWON\rMV455\rMVMAX 98\rMUOFF\r");
+        assert_eq!((r.volume, r.muted, r.power), (Some(45.5), Some(false), Some(true)));
+        assert_eq!(parse_telnet("MVMAX 98\rMV45\r").volume, Some(45.0));
+        assert_eq!(parse_telnet("MV05\rMUON\r").volume, Some(5.0));
+        assert_eq!(parse_telnet("MUON\r").muted, Some(true));
+        assert_eq!(parse_telnet("MVMAX 98\r").volume, None);
+        assert_eq!(parse_telnet("MV995\rMV1\rMVxy\r").volume, None);
     }
 
     #[test]

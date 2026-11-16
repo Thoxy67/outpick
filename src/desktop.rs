@@ -6,8 +6,11 @@
 //!
 //! Scripted screenshots for checking the UI without a TV:
 //!   cargo run -- --screenshot shot.png [--keys right,right,ok] [--size 1920x1080] [--config cfg.json]
-//! presses the keys one per frame once the inputs are loaded, waits for the
+//! presses the keys one by one (0.35 s apart) once the inputs are loaded, waits for the
 //! animations to settle, saves the window as PNG and exits.
+//!
+//! OUTPICK_BG=white (or black) replaces the stand-in picture with a plain one, to check the
+//! themes over a bright or a dark picture.
 
 use crate::app::{App, Nav, Outcome};
 use crate::model::mock_backend;
@@ -21,6 +24,9 @@ struct Script {
     requested: bool,
     done: Arc<AtomicBool>,
     started: Option<f64>,
+    /// When the last key was pressed: the next one waits, so it is a press of its own and
+    /// not a held arrow repeating.
+    pressed: f64,
 }
 
 struct Preview {
@@ -78,6 +84,7 @@ pub fn run() {
         requested: false,
         done: Arc::new(AtomicBool::new(false)),
         started: None,
+        pressed: f64::NEG_INFINITY,
     });
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
@@ -151,8 +158,11 @@ impl eframe::App for Preview {
             s.frame += 1;
             let now = ui.input(|i| i.time);
             if s.frame > 5 {
-                if let Some(k) = (!s.keys.is_empty()).then(|| s.keys.remove(0)) {
-                    keys.push(k);
+                if !s.keys.is_empty() {
+                    if now - s.pressed > key_spacing() {
+                        keys.push(s.keys.remove(0));
+                        s.pressed = now;
+                    }
                     s.started = None;
                 } else {
                     let since = *s.started.get_or_insert(now);
@@ -201,6 +211,15 @@ fn save_png(path: &str, img: &egui::ColorImage) -> Result<(), String> {
 /// Something picture-like behind the overlay, to judge transparency.
 fn fake_picture(ui: &egui::Ui, r: egui::Rect) {
     let p = ui.painter();
+    let plain = match std::env::var("OUTPICK_BG").as_deref() {
+        Ok("white") => Some(egui::Color32::WHITE),
+        Ok("black") => Some(egui::Color32::BLACK),
+        _ => None,
+    };
+    if let Some(c) = plain {
+        p.rect_filled(r, 0.0, c);
+        return;
+    }
     let mut mesh = egui::Mesh::default();
     let c = [
         egui::Color32::from_rgb(40, 90, 140),
@@ -215,6 +234,13 @@ fn fake_picture(ui: &egui::Ui, r: egui::Rect) {
     mesh.add_triangle(0, 2, 3);
     p.add(egui::Shape::mesh(mesh));
     p.circle_filled(r.center() + egui::vec2(-r.width() * 0.2, -r.height() * 0.15), r.height() * 0.12, egui::Color32::from_rgb(250, 220, 150));
+}
+
+/// Seconds between scripted keys: above the longest arrow repeat gap Customize offers, so
+/// the same arrow twice is two presses whatever the setting.
+fn key_spacing() -> f64 {
+    let gaps = crate::config::HOLD_GAP_MS;
+    gaps[gaps.len() - 1] as f64 / 1000.0 + 0.05
 }
 
 /// Seconds to wait after the last key before the screenshot (OUTPICK_SHOT_DELAY, default 0.8).

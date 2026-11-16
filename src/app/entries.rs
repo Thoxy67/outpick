@@ -26,6 +26,7 @@ impl App {
         match s.kind {
             SourceKind::LiveTv => t("source.live_tv").to_string(),
             SourceKind::Home => t("source.home").to_string(),
+            SourceKind::Apps => t("source.apps").to_string(),
             SourceKind::Hdmi | SourceKind::Analog if naming == Naming::Device => s.device_name(),
             _ => s.label.clone(),
         }
@@ -51,6 +52,10 @@ impl App {
             SourceKind::MediaServer => self.cfg.show_media_servers,
             _ => true,
         }).cloned());
+        // Last unless moved: a way into the apps, not a source.
+        if self.cfg.show_apps {
+            list.push(Source::apps());
+        }
         let rank = |id: &str| self.cfg.order.iter().position(|o| o == id).unwrap_or(usize::MAX);
         list.sort_by_key(|s| rank(&s.id)); // stable: unlisted keep the TV's order
         list.into_iter()
@@ -72,6 +77,8 @@ impl App {
                     })
                 } else if s.kind == SourceKind::MediaServer {
                     Some(t("picker.media_server").to_string())
+                } else if s.kind == SourceKind::Apps {
+                    Some(t("picker.apps_sub").to_string())
                 } else if !s.connected {
                     Some(t("picker.not_connected").to_string())
                 } else if let Some(input) = st.avr.active_input().filter(|_| st.avr.serves(&s.id)) {
@@ -91,7 +98,8 @@ impl App {
                 } else {
                     None
                 };
-                let current = (s.params.is_none() || s.kind == SourceKind::Home) && st.foreground.as_deref() == Some(s.app_id.as_str());
+                // The Apps tile is never what is on (its app id is empty).
+                let current = s.kind != SourceKind::Apps && (s.params.is_none() || s.kind == SourceKind::Home) && st.foreground.as_deref() == Some(s.app_id.as_str());
                 let avr = st.avr.serves(&s.id);
                 Entry { hidden: ov.is_some_and(|o| o.hidden), name, sub, icon, current, avr, source: s }
             })

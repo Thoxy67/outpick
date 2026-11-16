@@ -1,7 +1,7 @@
 //! The picker itself: its keys, its tiles and the source previews.
 
 use super::entries::Entry;
-use super::widgets::{fit, gradient, grid_cols, text_width, two_lines, vertical};
+use super::widgets::{RIM, fit, gradient, grid_cols, text_width, two_lines, vertical, walk};
 use super::{App, Nav, Screen, Hit};
 use crate::config::Layout;
 use crate::i18n::{t, tf};
@@ -33,12 +33,13 @@ impl App {
         let old = self.sel;
         // The key that opens an HDMI input's options: Down, or Right in a vertical list
         // (where Down moves). In a grid, Down on the last row. A long OK opens them anywhere.
-        let opens_options = *k == self.options_key_nav() && self.arrow_opens_options(entries);
+        // Not a held arrow: that one only moves, it never opens another screen.
+        let opens_options = !self.held && *k == self.options_key_nav() && self.arrow_opens_options(entries);
         match k {
             _ if opens_options => {
                 if let Some(id) = self.selected_hdmi(entries) {
                     self.opt_sel = None;
-                    self.screen = Screen::Options { id, sel: 0 };
+                    self.screen = Screen::Options { id, sel: super::options::SEL_START };
                     return;
                 }
             }
@@ -47,7 +48,7 @@ impl App {
                 self.armed_at = None;
                 self.opt_sel = None;
                 match entries.get(self.sel) {
-                    Some(e) => self.screen = Screen::Options { id: e.source.id.clone(), sel: 0 },
+                    Some(e) => self.screen = Screen::Options { id: e.source.id.clone(), sel: super::options::SEL_START },
                     None => self.open_customize(),
                 }
                 return;
@@ -55,6 +56,7 @@ impl App {
             // Source pressed again cycles the inputs and the highlighted one is taken
             // after `switch_delay_secs`, as on LG's picker. Only HDMI inputs with a cable
             // and Live TV take part (not USB, DLNA, Home or Customize), unless there are none.
+            // The Apps tile never does: it opens a list, it is not an input to switch to.
             // The arrows never start this countdown: they cancel it, and OK switches then.
             Nav::Source => {
                 let quick: Vec<usize> = entries
@@ -63,20 +65,20 @@ impl App {
                     .filter(|(_, e)| matches!(e.source.kind, SourceKind::Hdmi | SourceKind::LiveTv) && e.source.connected)
                     .map(|(i, _)| i)
                     .collect();
-                let quick = if quick.is_empty() { (0..entries.len()).collect() } else { quick };
+                let quick = if quick.is_empty() { (0..entries.len()).filter(|&i| entries[i].source.kind != SourceKind::Apps).collect() } else { quick };
                 if let Some(&next) = quick.iter().find(|&&i| i > self.sel).or(quick.first()) {
                     self.sel = next;
+                    self.armed_at = Some(now);
                 }
-                self.armed_at = Some(now);
             }
-            Nav::Left if !list => self.sel = (self.sel + n - 1) % n,
-            Nav::Right if !list => self.sel = (self.sel + 1) % n,
-            Nav::Up if list => self.sel = (self.sel + n - 1) % n,
-            Nav::Down if list => self.sel = (self.sel + 1) % n,
+            Nav::Left if !list => self.sel = walk(self.sel, n, -1, self.held),
+            Nav::Right if !list => self.sel = walk(self.sel, n, 1, self.held),
+            Nav::Up if list => self.sel = walk(self.sel, n, -1, self.held),
+            Nav::Down if list => self.sel = walk(self.sel, n, 1, self.held),
             Nav::Up if grid && self.sel >= cols => self.sel -= cols,
             // The arrow that leads nowhere in this layout opens Customize (not while a quick
             // switch counts down: an arrow cancels that first).
-            Nav::Up | Nav::Left if *k == self.customize_nav() && self.armed_at.is_none() => {
+            Nav::Up | Nav::Left if *k == self.customize_nav() && self.armed_at.is_none() && !self.held => {
                 self.open_customize();
                 return;
             }
@@ -102,6 +104,8 @@ impl App {
         if !self.cfg.show_previews {
             return;
         }
+        // A picture taken back (filed under an input it did not show) leaves its tile plain.
+        self.preview_tex.retain(|id, _| st.previews.contains_key(id));
         for (id, pv) in &st.previews {
             if self.preview_tex.get(id).is_some_and(|(seq, _)| *seq == pv.seq) {
                 continue;
@@ -181,6 +185,11 @@ impl App {
             return;
         }
         let e = &entries[self.sel];
+        // The Apps tile opens its list instead of launching anything.
+        if e.source.kind == SourceKind::Apps {
+            self.open_apps();
+            return;
+        }
         if !e.current {
             let _ = self.backend.commands.send(Command::Launch(e.source.app_id.clone(), e.source.params.clone()));
         }
@@ -260,7 +269,7 @@ impl App {
                 .unwrap_or_default()
         };
         if self.cfg.show_header {
-            self.header(p, rect, t("picker.title"), &subtitle, alpha);
+            self.header(p, rect, None, t("picker.title"), &subtitle, alpha);
         }
 
         // Lay tiles out, scrolling to keep the selection in view.
@@ -315,19 +324,20 @@ impl App {
                 continue;
             }
             let base = veil(mix(k.field, k.card, 0.35), alpha * self.cfg.panel_opacity.max(0.75));
-            clip.rect(rect_i, r, base, Stroke::new(1.0, veil(k.field_border, alpha * 0.6)), StrokeKind::Inside);
+            clip.rect(rect_i, r, base, self.border(1.0, veil(k.field_border, alpha * 0.6)), StrokeKind::Inside);
             if let Some(e) = entries.get(i) {
                 let live = st.previews.get(&e.source.id).is_some_and(|p| p.live);
                 if self.paint_preview(&clip, rect_i, r, &e.source.id, live, alpha) {
-                    clip.rect_stroke(rect_i, r, Stroke::new(1.0, veil(k.field_border, alpha * 0.6)), StrokeKind::Inside);
+                    clip.rect_stroke(rect_i, r, self.border(1.0, veil(k.field_border, alpha * 0.6)), StrokeKind::Inside);
                 }
             }
+            self.rim(&clip, rect_i, r, alpha * RIM);
             self.add_hit(rect_i.intersect(area), Hit::Tile(i));
         }
         if n > 0 {
             let pictured = entries.get(self.sel).is_some_and(|e| self.pictured(e));
             clip.rect_filled(hl, r, veil(k.hover, alpha * if pictured { 0.25 } else { 1.0 }));
-            clip.rect_stroke(hl.expand(5.0 * s), r + 5.0 * s, Stroke::new(3.0 * s, veil(k.accent, alpha)), StrokeKind::Outside);
+            clip.rect_stroke(hl.expand(5.0 * s), r + 5.0 * s, Stroke::new(3.0 * s, veil(k.ring, alpha)), StrokeKind::Outside);
             // Quick switch countdown: a bar along the bottom of the selection that empties.
             // and the seconds left in a pill at its top-left corner.
             if let Some((f, secs)) = self.switch_left {
@@ -363,7 +373,8 @@ impl App {
                     let e = Entry {
                         source: Source::live_tv(),
                         name: t("picker.customize").into(),
-                        sub: Some(t("picker.customize_sub").into()),
+                        // A newer version is said here, and nowhere else in the picker.
+                        sub: Some(t(if self.update_notice(st).is_some() { "picker.customize_update" } else { "picker.customize_sub" }).into()),
                         icon: SourceIcon::Auto,
                         current: false,
                         hidden: false,
@@ -376,7 +387,8 @@ impl App {
 
         // Content cut by the panel's edge fades out there, with a chevron when it is sideways.
         let edge = 48.0 * s;
-        let fade_c = veil(k.card, alpha * self.cfg.panel_opacity.max(0.85));
+        // Only on a (nearly) opaque panel: over a see-through one the tint shows as a band.
+        let fade_c = if self.cfg.panel_opacity >= 0.85 { veil(k.card, alpha * self.cfg.panel_opacity) } else { Color32::TRANSPARENT };
         let clear = Color32::TRANSPARENT;
         let outer = area.expand(10.0 * s);
         if overflow_x > 0.0 {
@@ -432,7 +444,8 @@ impl App {
             let cancel = if vertical(self.cfg.layout) { "▲ ▼" } else { "◀ ▶" };
             self.footer(p, rect, &[(t("key.ok"), t("hint.switch_now")), (cancel, t("hint.cancel")), (t("key.back"), t("hint.close"))], alpha);
         } else if self.cfg.show_hints {
-            let mut hints = vec![(t("key.ok"), t("hint.switch")), (mv, t("hint.move"))];
+            let ok = if entries.get(self.sel).is_some_and(|e| e.source.kind == SourceKind::Apps) { t("hint.open") } else { t("hint.switch") };
+            let mut hints = vec![(t("key.ok"), ok), (mv, t("hint.move"))];
             // The options: with the arrow where it opens them from this tile, else a long OK
             // (which opens them from any tile, in every layout).
             if self.arrow_opens_options(entries) {

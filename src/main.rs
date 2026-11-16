@@ -19,6 +19,9 @@ mod parse;
 #[cfg_attr(not(feature = "webos"), allow(dead_code))]
 mod rootside;
 mod theme;
+// The update check's feed, changelog and remembered state: used by both builds, tested on any.
+#[cfg_attr(not(feature = "webos"), allow(dead_code))]
+mod update;
 
 #[cfg(feature = "webos")]
 mod webos;
@@ -43,6 +46,26 @@ fn main() {
         }
         if let Some(i) = args.iter().position(|a| a == "--capture-access") {
             std::process::exit(webos::capture::cli(args.get(i + 1).map(String::as_str).unwrap_or("status")));
+        }
+        // The Apps list's backend over ssh: what it lists and how it reads the icons here
+        // (`--list-apps`), and root's copy of the icons the jailed app cannot read.
+        let px = |i: usize| args.get(i + 1).and_then(|v| v.parse::<u32>().ok()).unwrap_or(48);
+        if let Some(i) = args.iter().position(|a| a == "--list-apps") {
+            std::process::exit(webos::apps::list_cli(px(i)));
+        }
+        if let Some(i) = args.iter().position(|a| a == "--copy-app-icons") {
+            std::process::exit(webos::apps::copy_cli(px(i)));
+        }
+        if let Some(i) = args.iter().position(|a| a == "--check-update") {
+            // Diagnostics over ssh: the update check as the app makes it, for this version or
+            // an older one given after the flag. Installs nothing.
+            std::process::exit(webos::update::check_cli(args.get(i + 1).map(String::as_str)));
+        }
+        if let Some(i) = args.iter().position(|a| a == "--preview-probe") {
+            // Diagnostics over ssh: pictures taken the way the previews take them, and what
+            // the capture service's file looked like when it answered.
+            let n = args.get(i + 1).and_then(|v| v.parse::<usize>().ok()).unwrap_or(10);
+            std::process::exit(webos::preview_probe(n, args.iter().any(|a| a == "keep")));
         }
         if args.iter().any(|a| a == "--avr-scan") {
             // Diagnostics over ssh: what the receiver search finds from here.

@@ -143,10 +143,189 @@ pub fn foreground_of(v: &Value, own: &str) -> Option<String> {
         .or_else(|| v.get("appId").and_then(Value::as_str).filter(|id| *id != own).map(str::to_string))
 }
 
+/// An app as `applicationManager/listLaunchPoints` lists it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct LaunchPoint {
+    pub id: String,
+    pub title: String,
+    /// Its launch parameters, when it has any (a launch point pinned to a channel, say).
+    pub params: Option<Value>,
+    /// `iconColor`, painted behind the icon as LG's launcher does.
+    pub color: Option<[u8; 3]>,
+    /// `icon`, a small PNG (about 80 px).
+    pub icon: Option<String>,
+    /// The larger ones, smallest first: `mediumLargeIcon` (115), `largeIcon` (130),
+    /// `extraLargeIcon` (192).
+    pub large: Vec<String>,
+}
+
+/// The launch points, one row each, sorted by title whatever its case. Left out: `own` (the
+/// picker itself), those the answer marks `"hidden": true`, and repeats (the same
+/// `launchPointId`, or the same app with the same params). An app may have several (an
+/// input pinned to the home screen, a bookmark): each is its own row, launched with its params.
+pub fn parse_launch_points(v: &Value, own: &str) -> Vec<LaunchPoint> {
+    let mut seen: Vec<String> = Vec::new();
+    let mut out: Vec<LaunchPoint> = v
+        .get("launchPoints")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|p| {
+            let s = |k: &str| p.get(k).and_then(Value::as_str).map(str::trim).filter(|t| !t.is_empty()).map(str::to_string);
+            let id = s("id").filter(|id| id != own)?;
+            if p.get("hidden").and_then(Value::as_bool) == Some(true) {
+                return None;
+            }
+            let title = s("title").unwrap_or_else(|| id.clone());
+            let params = p.get("params").filter(|v| v.as_object().is_some_and(|o| !o.is_empty())).cloned();
+            let color = s("iconColor").and_then(|c| {
+                let hex = c.strip_prefix('#').filter(|h| h.len() == 6 && h.is_ascii())?;
+                let byte = |i: usize| u8::from_str_radix(&hex[i..i + 2], 16).ok();
+                Some([byte(0)?, byte(2)?, byte(4)?])
+            });
+            let large = ["mediumLargeIcon", "largeIcon", "extraLargeIcon"].into_iter().filter_map(s).collect();
+            // Seen already: by its launch point id, or as the same app and params.
+            let key = format!("{id}\u{0}{}", params.as_ref().map(Value::to_string).unwrap_or_default());
+            let lp = s("launchPointId").map(|l| format!("lp\u{0}{l}"));
+            if seen.contains(&key) || lp.as_ref().is_some_and(|l| seen.contains(l)) {
+                return None;
+            }
+            seen.push(key);
+            seen.extend(lp);
+            Some(LaunchPoint { id, title, params, color, icon: s("icon"), large })
+        })
+        .collect();
+    out.sort_by_cached_key(|p| p.title.to_lowercase());
+    out
+}
+
+/// The icon files to try, best first, for a row drawing the icon `px` pixels wide: the
+/// small one when it is big enough (80 px), else the larger ones first. Only file paths:
+/// a URL or a relative name cannot be read here.
+pub fn icon_candidates(p: &LaunchPoint, px: u32) -> Vec<&str> {
+    let small = p.icon.iter();
+    let large = p.large.iter();
+    let ordered: Vec<&String> = if px <= 80 { small.chain(large).collect() } else { large.chain(small).collect() };
+    let mut out: Vec<&str> = Vec::with_capacity(ordered.len());
+    for f in ordered {
+        if f.starts_with('/') && !out.contains(&f.as_str()) {
+            out.push(f);
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::icons::SourceIcon;
+
+    #[test]
+    fn c1_launch_points() {
+        let v = fixture("c1-listLaunchPoints.json");
+        let apps = parse_launch_points(&v, "com.thoxy.outpick");
+        let titles: Vec<&str> = apps.iter().map(|a| a.title.as_str()).collect();
+        // Sorted whatever the case; the picker itself left out.
+        assert_eq!(
+            titles,
+            [
+                "Apps",
+                "Glasshouse",
+                "Homebrew Channel",
+                "Homebrew Channel Updater",
+                "Lecteur multimédia",
+                "LG Input Hook",
+                "Luma",
+                "Magic Pointer",
+                "Navigateur Web",
+                "Netflix",
+                "Prime Video",
+                "Tableau de bord Maison",
+            ]
+        );
+        let prime = apps.iter().find(|a| a.id == "amazon").unwrap();
+        assert_eq!(prime.color, Some([0x05, 0x78, 0xff]));
+        assert_eq!(prime.icon.as_deref(), Some("/media/cryptofs/apps/usr/palm/applications/amazon/aiv_white_80x80.png"));
+        assert_eq!(prime.params, None);
+        assert_eq!(prime.large.len(), 3);
+        // No colour given: none.
+        assert_eq!(apps.iter().find(|a| a.id == "io.github.ttmx.magicptr").unwrap().color, None);
+        // The small icon at list size; the larger first above 80 px, each file once.
+        assert_eq!(icon_candidates(prime, 48)[0], "/media/cryptofs/apps/usr/palm/applications/amazon/aiv_white_80x80.png");
+        assert_eq!(
+            icon_candidates(prime, 120)[..2],
+            ["/media/cryptofs/apps/usr/palm/applications/amazon/76989544803779185_38385022_115x115_webos.png", "/media/cryptofs/apps/usr/palm/applications/amazon/aiv_white_130x130.png"]
+        );
+        let home = apps.iter().find(|a| a.id == "com.webos.app.homeconnect").unwrap();
+        // Its large icons repeat the small one: tried once.
+        assert_eq!(icon_candidates(home, 48), ["/usr/palm/applications/com.webos.app.homeconnect/icon.png", "/usr/palm/applications/com.webos.app.homeconnect/icon_large.png"]);
+    }
+
+    #[test]
+    fn launch_points_odd_entries() {
+        let v = json!({"launchPoints": [
+            {"id": "b.app", "title": " beta ", "icon": "http://example.com/i.png", "iconColor": "#12345", "params": {}},
+            {"id": "a.app", "icon": "icon.png", "largeIcon": "/x/large.png", "params": {"channel": 5}},
+            {"title": "no id"},
+            {"id": "me", "title": "Picker"}
+        ]});
+        let apps = parse_launch_points(&v, "me");
+        assert_eq!(apps.len(), 2);
+        // No title: its id stands in.
+        assert_eq!((apps[0].id.as_str(), apps[0].title.as_str()), ("a.app", "a.app"));
+        assert_eq!(apps[0].params, Some(json!({"channel": 5})));
+        assert_eq!(icon_candidates(&apps[0], 48), ["/x/large.png"]);
+        assert_eq!((apps[1].title.as_str(), apps[1].color, apps[1].params.clone()), ("beta", None, None));
+        assert!(icon_candidates(&apps[1], 48).is_empty());
+        assert!(parse_launch_points(&json!({"returnValue": false}), "me").is_empty());
+    }
+
+    #[test]
+    fn qned_launch_points() {
+        let v = fixture("qned-listLaunchPoints.json");
+        let apps = parse_launch_points(&v, "com.thoxy.outpick");
+        assert_eq!(apps.len(), 16);
+        assert!(apps.iter().all(|a| a.id != "com.thoxy.outpick"));
+        assert!(apps.windows(2).all(|w| w[0].title.to_lowercase() <= w[1].title.to_lowercase()));
+        // Inputs pinned to the home screen are launch points too, with their params.
+        let salon = apps.iter().find(|a| a.title == "Salon").unwrap();
+        assert_eq!(salon.id, "com.webos.app.hdmi1");
+        assert_eq!(salon.params, Some(json!({"PhysicalAddress": "1000", "id": "uniqueId", "value": "4"})));
+        // An empty mediumLargeIcon is no file; a 400 px one is tried first for a card.
+        let disc = apps.iter().find(|a| a.id == "com.webos.app.discovery").unwrap();
+        assert_eq!(disc.large, ["/mnt/otncabi/usr/palm/applications/com.webos.app.discovery/asset/hd1080/lgstore_130x130.png"]);
+        let fr = apps.iter().find(|a| a.id == "fr.public.value").unwrap();
+        assert_eq!(icon_candidates(fr, 88)[0], "/media/cryptofs/apps/usr/palm/applications/fr.public.value/icon-400x400.png");
+    }
+
+    #[test]
+    fn launch_points_hidden_repeated_and_any_icon() {
+        let v = json!({"launchPoints": [
+            {"id": "x", "title": "X", "launchPointId": "x_default"},
+            {"id": "x", "title": "X again", "launchPointId": "x_default"},
+            {"id": "x", "title": "X same", "params": {}},
+            {"id": "x", "title": "X channel 5", "launchPointId": "x_5", "params": {"ch": 5}},
+            {"id": "x", "title": "X channel 5 bis", "params": {"ch": 5}},
+            {"id": "h", "title": "Hidden", "hidden": true},
+            {"id": "v", "title": "Visible", "hidden": false, "icon": "", "largeIcon": "relative.png", "extraLargeIcon": "https://e.com/i.png"},
+            {"id": "n", "title": 42, "icon": 7, "params": "nope", "iconColor": "red"},
+            {"id": " ", "title": "blank id"},
+            "not an object",
+            {"id": "u", "title": "Unicode \u{65e5}\u{672c}\u{8a9e} \u{1f3ac}", "unknownField": {"deep": [1, 2]}}
+        ]});
+        let apps = parse_launch_points(&v, "me");
+        let rows: Vec<(&str, &str)> = apps.iter().map(|a| (a.id.as_str(), a.title.as_str())).collect();
+        assert_eq!(rows, [("n", "n"), ("u", "Unicode \u{65e5}\u{672c}\u{8a9e} \u{1f3ac}"), ("v", "Visible"), ("x", "X"), ("x", "X channel 5")]);
+        // No usable file: no candidate (the generic icon).
+        for a in &apps {
+            assert!(icon_candidates(a, 48).is_empty() && icon_candidates(a, 200).is_empty(), "{}", a.id);
+        }
+        assert_eq!(apps[0].params, None);
+        assert_eq!(apps[0].color, None);
+        // Not even a list: nothing.
+        assert!(parse_launch_points(&json!({"launchPoints": {"a": 1}}), "me").is_empty());
+        assert!(parse_launch_points(&json!("x"), "me").is_empty());
+    }
 
     fn fixture(name: &str) -> Value {
         let path = format!("{}/tests/fixtures/{name}", env!("CARGO_MANIFEST_DIR"));

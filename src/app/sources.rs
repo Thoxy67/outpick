@@ -2,7 +2,7 @@
 
 use super::options::SEL_RENAME;
 use super::settings::Item;
-use super::widgets::{fit, keep_visible, text_width};
+use super::widgets::{HELP_H, RIM, fit, keep_visible, text_width, walk};
 use super::{App, Hit, Nav, Screen};
 use crate::i18n::{t, tf};
 use crate::icons::{self, SourceIcon};
@@ -43,10 +43,10 @@ impl App {
                     sel = to;
                 }
             }
-            Nav::Up => sel = (sel + n - 1) % n,
-            Nav::Down => sel = (sel + 1) % n,
-            Nav::Left if !grabbed => col = (col + COLS - 1) % COLS,
-            Nav::Right if !grabbed => col = (col + 1) % COLS,
+            Nav::Up => sel = walk(sel, n, -1, self.held),
+            Nav::Down => sel = walk(sel, n, 1, self.held),
+            Nav::Left if !grabbed => col = walk(col, COLS, -1, self.held),
+            Nav::Right if !grabbed => col = walk(col, COLS, 1, self.held),
             Nav::Ok => {
                 let id = &ids[sel];
                 match col {
@@ -139,12 +139,33 @@ impl App {
         let head = pad + 38.0 * s + 18.0 * s;
         let foot = 72.0 * s;
         let row_h = 70.0 * s;
-        let want = vec2(880.0 * s, head + n.max(1) as f32 * row_h + foot);
+        // The columns' names over the first row, and what the selected cell does under the last.
+        let titles_h = 26.0 * s;
+        let help_h = HELP_H * s;
+        let want = vec2(880.0 * s, head + titles_h + n.max(1) as f32 * row_h + help_h + foot);
         let rect = self.panel_rect(screen, want).translate(offset);
         self.panel(p, rect, alpha);
-        self.header(p, rect, t("sources.title"), t(if grabbed { "sources.moving" } else { "sources.pick_column" }), alpha);
+        // How many show in the picker (the keys are said under the rows).
+        let shown = all.iter().filter(|e| !e.hidden).count();
+        let summary = if shown == 1 { t("summary.inputs_one").to_string() } else { tf("summary.inputs", &[("n", &shown.to_string())]) };
+        self.header(p, rect, None, t("sources.title"), &summary, alpha);
 
-        let area = Rect::from_min_max(pos2(rect.min.x + pad * 0.6, rect.min.y + head), pos2(rect.max.x - pad * 0.6, rect.max.y - foot));
+        let area = Rect::from_min_max(pos2(rect.min.x + pad * 0.6, rect.min.y + head + titles_h), pos2(rect.max.x - pad * 0.6, rect.max.y - foot - help_h));
+        let cells_of = |r: Rect| {
+            // Visibility and icon on the left, rename and move on the right.
+            let (cw, ch) = (60.0 * s, r.height() - 12.0 * s);
+            [
+                Rect::from_center_size(pos2(r.min.x + 10.0 * s + cw / 2.0, r.center().y), vec2(cw, ch)),
+                Rect::from_center_size(pos2(r.min.x + 18.0 * s + cw * 1.5, r.center().y), vec2(cw, ch)),
+                Rect::from_center_size(pos2(r.max.x - 18.0 * s - cw * 1.5, r.center().y), vec2(cw, ch)),
+                Rect::from_center_size(pos2(r.max.x - 10.0 * s - cw / 2.0, r.center().y), vec2(cw, ch)),
+            ]
+        };
+        // Small caps over each cell's column, as the options' section headings.
+        let heads = cells_of(Rect::from_min_size(pos2(area.min.x, area.min.y - titles_h), vec2(area.width(), titles_h)));
+        for (cell, key) in heads.iter().zip(["sources.col_show", "sources.col_icon", "sources.col_rename", "sources.col_move"]) {
+            p.text(pos2(cell.center().x, area.min.y - titles_h / 2.0 - 2.0 * s), Align2::CENTER_CENTER, t(key), semibold(14.0 * s), veil(k.text_faint, alpha));
+        }
         let visible = (area.height() / row_h).floor().max(1.0) as usize;
         let first = keep_visible(sel, visible, n);
         let y0 = self.anim(ui, "sources-scroll", first as f32 * row_h, 0.15);
@@ -158,19 +179,11 @@ impl App {
             let selected = i == sel;
             let row_fill = if selected && grabbed { k.accent_soft } else if selected { veil(k.hover, 0.8) } else { veil(k.field, 0.5) };
             let ring = if selected && grabbed { 2.0 * s } else { 0.0 };
-            clip.rect(r, k.radius * 1.5 * s, veil(row_fill, alpha), Stroke::new(ring, veil(k.accent, alpha)), StrokeKind::Inside);
+            clip.rect(r, k.radius * 1.5 * s, veil(row_fill, alpha), Stroke::new(ring, veil(k.ring, alpha)), StrokeKind::Inside);
 
-            // Cells: visibility and icon on the left, rename and move on the right.
-            let cw = 60.0 * s;
-            let ch = r.height() - 12.0 * s;
-            let cells = [
-                Rect::from_center_size(pos2(r.min.x + 10.0 * s + cw / 2.0, r.center().y), vec2(cw, ch)),
-                Rect::from_center_size(pos2(r.min.x + 18.0 * s + cw * 1.5, r.center().y), vec2(cw, ch)),
-                Rect::from_center_size(pos2(r.max.x - 18.0 * s - cw * 1.5, r.center().y), vec2(cw, ch)),
-                Rect::from_center_size(pos2(r.max.x - 10.0 * s - cw / 2.0, r.center().y), vec2(cw, ch)),
-            ];
+            let cells = cells_of(r);
             if selected && !grabbed {
-                clip.rect_stroke(cells[col], k.radius * s, Stroke::new(2.5 * s, veil(k.accent, alpha)), StrokeKind::Outside);
+                clip.rect_stroke(cells[col], k.radius * s, Stroke::new(2.5 * s, veil(k.ring, alpha)), StrokeKind::Outside);
             }
             for (c, cell) in cells.iter().enumerate() {
                 self.add_hit(cell.intersect(area), Hit::SourceCell(i, c));
@@ -203,6 +216,14 @@ impl App {
                 clip.text(pos2(x, dy), Align2::LEFT_CENTER, fit(p, &detail, regular(16.0 * s), maxw), regular(16.0 * s), veil(k.text_dim, alpha));
             }
         }
+        let help = match col {
+            _ if grabbed => "help.sources_grabbed",
+            COL_SHOW => "help.sources_show",
+            COL_ICON => "help.sources_icon",
+            COL_RENAME => "help.sources_rename",
+            _ => "help.sources_move",
+        };
+        self.help_line(p, Rect::from_min_max(pos2(area.min.x, area.max.y), pos2(area.max.x, area.max.y + help_h)), t(help), alpha);
         if grabbed {
             self.footer(p, rect, &[("▲ ▼", t("hint.move")), (t("key.ok"), t("hint.drop")), (t("key.back"), t("hint.cancel"))], alpha);
             return;
@@ -234,10 +255,10 @@ impl App {
         let size = want.min(screen.size() - Vec2::splat(112.0 * s));
         let rect = Rect::from_min_size(pos2(screen.center().x - size.x / 2.0, screen.min.y + 90.0 * s), size).translate(offset);
         self.panel(p, rect, alpha);
-        self.header(p, rect, head.0, head.1, alpha);
+        self.header(p, rect, None, head.0, head.1, alpha);
 
         let field = Rect::from_min_size(pos2(rect.min.x + pad, rect.min.y + 96.0 * s), vec2(rect.width() - pad * 2.0, 66.0 * s));
-        p.rect(field, k.radius * 1.5 * s, veil(k.field, alpha), Stroke::new(2.0 * s, veil(k.accent, alpha)), StrokeKind::Inside);
+        p.rect(field, k.radius * 1.5 * s, veil(k.field, alpha), Stroke::new(2.0 * s, veil(k.ring, alpha)), StrokeKind::Inside);
         let font = medium(26.0 * s);
         let inner = field.shrink2(vec2(20.0 * s, 0.0));
         let (shown, color) = if text.is_empty() { (tv_name.to_string(), k.text_faint) } else { (text.to_string(), k.text) };
@@ -266,8 +287,8 @@ impl App {
             Screen::Sources { sel: row, col: COL_ICON, grabbed: false }
         };
         match k {
-            Nav::Left => sel = (sel + n - 1) % n,
-            Nav::Right => sel = (sel + 1) % n,
+            Nav::Left => sel = walk(sel, n, -1, self.held),
+            Nav::Right => sel = walk(sel, n, 1, self.held),
             Nav::Up if sel >= ICON_COLS => sel -= ICON_COLS,
             Nav::Down if sel + ICON_COLS < n => sel += ICON_COLS,
             Nav::Ok => {
@@ -300,13 +321,14 @@ impl App {
         let size = vec2(ICON_COLS as f32 * cw + (ICON_COLS - 1) as f32 * gap + 2.0 * pad, top_h + rows as f32 * ch + (rows - 1) as f32 * gap + 84.0 * s);
         let rect = Rect::from_center_size(screen.center(), size.min(screen.size() - Vec2::splat(40.0 * s)));
         self.panel(p, rect, alpha);
-        self.header(p, rect, t("icon_pick.title"), &name, alpha);
+        self.header(p, rect, None, t("icon_pick.title"), &name, alpha);
         let cell = |i: usize| Rect::from_min_size(pos2(rect.min.x + pad + (i % ICON_COLS) as f32 * (cw + gap), rect.min.y + top_h + (i / ICON_COLS) as f32 * (ch + gap)), vec2(cw, ch));
         for (i, icon) in SourceIcon::ALL.iter().enumerate() {
             let card = cell(i);
             self.add_hit(card, Hit::PickCell(i));
             let chosen = i == sel;
-            p.rect(card, k.radius_lg * 1.4 * s, veil(if chosen { k.accent_soft } else { k.field }, alpha * 0.8), Stroke::new(1.0, veil(k.field_border, alpha)), StrokeKind::Inside);
+            p.rect(card, k.radius_lg * 1.4 * s, veil(if chosen { k.accent_soft } else { k.field }, alpha * 0.8), self.border(1.0, veil(k.field_border, alpha)), StrokeKind::Inside);
+            self.rim(p, card, k.radius_lg * 1.4 * s, alpha * RIM);
             // Auto shows what the TV picked for this input.
             let svg = match (icon, entry) {
                 (SourceIcon::Auto, Some(e)) => e.source.tv_icon.svg(),
@@ -324,7 +346,7 @@ impl App {
         let target = cell(sel);
         let at = pos2(self.anim(ui, "icon-x", target.min.x, 0.12), self.anim(ui, "icon-y", target.min.y, 0.12));
         let ring = Rect::from_min_size(at, vec2(cw, ch)).expand(4.0 * s);
-        p.rect_stroke(ring, k.radius_lg * 1.4 * s + 4.0 * s, Stroke::new(3.0 * s, veil(k.accent, alpha)), StrokeKind::Outside);
+        p.rect_stroke(ring, k.radius_lg * 1.4 * s + 4.0 * s, Stroke::new(3.0 * s, veil(k.ring, alpha)), StrokeKind::Outside);
         self.footer(p, rect, &[("◀ ▲ ▼ ▶", t("hint.choose")), (t("key.ok"), t("hint.confirm")), (t("key.back"), t("hint.cancel"))], alpha);
     }
 }

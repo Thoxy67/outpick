@@ -127,7 +127,10 @@ pub fn detect() -> KeyOwner {
     for e in &chain_of(&configs) {
         if is_ours(e) {
             let file = e.get("file").and_then(Value::as_str).unwrap_or("");
-            return if Path::new(file).exists() { KeyOwner::Picker } else { KeyOwner::Broken("filter file missing".into()) };
+            // The jailed app may not see the filter's folder at all (the QNED's jail has no
+            // /var/lib/outpick): missing is only said by who can look.
+            let hidden = !is_root() && !Path::new(file).parent().is_some_and(Path::exists);
+            return if hidden || Path::new(file).exists() { KeyOwner::Picker } else { KeyOwner::Broken("filter file missing".into()) };
         }
         if lg_dir(e) {
             // LG's own filters come first from here: nothing else took the key.

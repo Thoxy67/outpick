@@ -2,7 +2,7 @@
 
 use super::pickers::{POSITION_GRID, layout_glyph};
 use super::sources::COL_SHOW;
-use super::widgets::{cycle, cycle_num, fit, step, text_width};
+use super::widgets::{HELP_H, cycle, cycle_num, fit, step, text_width, walk};
 use super::{App, Hit, Nav, Screen};
 use crate::config::{Config, Corners, Layout, Naming, Position};
 use crate::i18n::{Language, t, tf};
@@ -39,6 +39,8 @@ pub(super) enum Item {
     ShowHome,
     ShowUsb,
     ShowMediaServers,
+    ShowApps,
+    AppsView,
     AutoClose,
     ClockShow,
     ClockStyle,
@@ -49,11 +51,15 @@ pub(super) enum Item {
     SourceKey,
     SwitchDelay,
     MultikeyOpens,
+    LongPress,
+    HoldGap,
     Sources,
     Reset,
     AvrEnabled,
     AvrDevice,
     AvrProtocol,
+    CheckUpdates,
+    Update,
 }
 
 /// Customize's sections, as the root page lists them: (title key, icon, its options).
@@ -63,14 +69,78 @@ const PAGES: &[(&str, &str, &[Item])] = &[
     (
         "section.inputs",
         "cable",
-        &[Item::Sources, Item::Naming, Item::ShowDevices, Item::ShowDisconnected, Item::ShowHome, Item::ShowLiveTv, Item::ShowUsb, Item::ShowMediaServers],
+        &[Item::Sources, Item::Naming, Item::ShowDevices, Item::ShowDisconnected, Item::ShowHome, Item::ShowLiveTv, Item::ShowUsb, Item::ShowMediaServers, Item::ShowApps, Item::AppsView],
     ),
     ("section.previews", "monitor", &[Item::ShowPreviews, Item::PreviewFps, Item::CaptureAccess]),
     ("section.clock", "timer", &[Item::ClockShow, Item::ClockStyle, Item::ClockSize, Item::Clock24h, Item::ClockSeconds, Item::ClockPlace]),
-    ("section.remote", "tv", &[Item::SourceKey, Item::MultikeyOpens, Item::SwitchDelay, Item::AutoClose]),
+    ("section.remote", "tv", &[Item::SourceKey, Item::MultikeyOpens, Item::SwitchDelay, Item::AutoClose, Item::LongPress, Item::HoldGap]),
     ("section.avr", "speaker", &[Item::AvrEnabled, Item::AvrDevice, Item::AvrProtocol]),
-    ("section.general", "settings", &[Item::Language, Item::ShowCustomizeTile, Item::Reset]),
+    ("section.general", "settings", &[Item::Language, Item::ShowCustomizeTile, Item::CheckUpdates, Item::Update, Item::Reset]),
 ];
+
+/// What each section holds, said under the root page's rows (as `PAGES`).
+const PAGE_HELP: [&str; 8] = [
+    "help.section.appearance",
+    "help.section.layout",
+    "help.section.inputs",
+    "help.section.previews",
+    "help.section.clock",
+    "help.section.remote",
+    "help.section.avr",
+    "help.section.general",
+];
+
+/// The sentence saying what `item` does, shown under the rows while it is selected.
+fn help_key(item: Item) -> &'static str {
+    match item {
+        Item::Language => "help.language",
+        Item::ShowCustomizeTile => "help.show_customize_tile",
+        Item::Theme => "help.theme",
+        Item::Accent => "help.accent",
+        Item::Corners => "help.corners",
+        Item::Size => "help.size",
+        Item::ShowPanel => "help.show_panel",
+        Item::Opacity => "help.opacity",
+        Item::Dim => "help.dim",
+        Item::Animations => "help.animations",
+        Item::Layout => "help.layout",
+        Item::Position => "help.position",
+        Item::ShowIcons => "help.show_icons",
+        Item::ShowHeader => "help.show_header",
+        Item::ShowHints => "help.show_hints",
+        Item::ShowDisconnected => "help.show_disconnected",
+        Item::ShowDevices => "help.show_devices",
+        Item::ShowLiveTv => "help.show_live_tv",
+        Item::Naming => "help.naming",
+        Item::ShowPreviews => "help.show_previews",
+        Item::PreviewFps => "help.preview_fps",
+        Item::CaptureAccess => "help.capture_access",
+        Item::ShowHome => "help.show_home",
+        Item::ShowUsb => "help.show_usb",
+        Item::ShowMediaServers => "help.show_media_servers",
+        Item::ShowApps => "help.show_apps",
+        Item::AppsView => "help.apps_view",
+        Item::AutoClose => "help.auto_close",
+        Item::ClockShow => "help.clock_show",
+        Item::ClockStyle => "help.clock_style",
+        Item::ClockSize => "help.clock_size",
+        Item::Clock24h => "help.clock_24h",
+        Item::ClockSeconds => "help.clock_seconds",
+        Item::ClockPlace => "help.clock_place",
+        Item::SourceKey => "help.source_key",
+        Item::SwitchDelay => "help.switch_delay",
+        Item::MultikeyOpens => "help.multikey_opens",
+        Item::LongPress => "help.long_press",
+        Item::HoldGap => "help.hold_gap",
+        Item::Sources => "help.sources",
+        Item::Reset => "help.reset",
+        Item::AvrEnabled => "help.avr_enabled",
+        Item::AvrDevice => "help.avr_device",
+        Item::AvrProtocol => "help.avr_protocol",
+        Item::CheckUpdates => "help.check_updates",
+        Item::Update => "help.update",
+    }
+}
 
 /// Clock sizes: tenths up to 160 %, then fifths (big clocks need fewer stops).
 const CLOCK_SIZES: [f32; 20] = [0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 1.1, 1.2, 1.3, 1.4, 1.5, 1.6, 1.8, 2.0, 2.2, 2.4, 2.6, 2.8, 3.0];
@@ -84,6 +154,7 @@ fn visible(item: Item, cfg: &Config, st: &TvState) -> bool {
         Item::CaptureAccess => st.capture_access.is_some() && !(st.capture_access == Some(false) && st.preview_supported == Some(true)),
         Item::ClockStyle | Item::ClockSize | Item::Clock24h | Item::ClockSeconds | Item::ClockPlace => cfg.clock.show,
         Item::AvrDevice | Item::AvrProtocol => cfg.avr.enabled,
+        Item::AppsView => cfg.show_apps,
         _ => true,
     }
 }
@@ -130,8 +201,10 @@ fn row_kind_of(item: Item) -> RowKind {
         | Item::ShowLiveTv
         | Item::ShowUsb
         | Item::ShowMediaServers
-        | Item::AvrEnabled => RowKind::Toggle,
-        Item::ClockPlace | Item::Sources | Item::AvrDevice => RowKind::Page,
+        | Item::ShowApps
+        | Item::AvrEnabled
+        | Item::CheckUpdates => RowKind::Toggle,
+        Item::ClockPlace | Item::Sources | Item::AvrDevice | Item::Update => RowKind::Page,
         Item::Reset => RowKind::Button,
         _ => RowKind::Choice,
     }
@@ -155,8 +228,6 @@ enum RowKind {
 /// A drawn row of Customize.
 #[derive(Clone, Copy)]
 enum SettingsRow {
-    /// The open section's title (not selectable).
-    Section(&'static str),
     /// Root page: section `n` of `PAGES`.
     Page(usize),
     /// Section page: an option.
@@ -184,18 +255,20 @@ impl App {
         }
     }
 
-    /// The root page: one row per section.
+    /// The root page: one row per section; Back or Left goes back to the picker.
     fn settings_root_key(&mut self, k: &Nav, mut sel: usize) {
         let n = PAGES.len();
         sel = sel.min(n - 1);
         match k {
-            Nav::Up => sel = (sel + n - 1) % n,
-            Nav::Down => sel = (sel + 1) % n,
+            Nav::Up => sel = walk(sel, n, -1, self.held),
+            Nav::Down => sel = walk(sel, n, 1, self.held),
+            // A held arrow only moves: it opens and leaves nothing.
+            Nav::Left | Nav::Right if self.held => {}
             Nav::Ok | Nav::Right => {
                 self.screen = settings_screen(Some(sel), 0, false);
                 return;
             }
-            Nav::Back | Nav::Erase | Nav::Source => {
+            Nav::Back | Nav::Erase | Nav::Source | Nav::Left => {
                 self.persist();
                 self.screen = Screen::Picker;
                 return;
@@ -215,17 +288,19 @@ impl App {
         let adjustable = matches!(kind, RowKind::Choice | RowKind::Slider(..));
         match k {
             Nav::Up => {
-                sel = (sel + n - 1) % n;
+                sel = walk(sel, n, -1, self.held);
                 confirm_reset = false;
             }
             Nav::Down => {
-                sel = (sel + 1) % n;
+                sel = walk(sel, n, 1, self.held);
                 confirm_reset = false;
             }
             Nav::Left | Nav::Right if adjustable => {
                 self.adjust(item, if *k == Nav::Left { -1 } else { 1 });
                 self.retheme(ctx);
             }
+            // A held arrow only moves and adjusts: it opens and leaves nothing.
+            Nav::Left | Nav::Right if self.held => {}
             Nav::Back | Nav::Erase | Nav::Left => {
                 self.screen = settings_screen(None, page, false);
                 return;
@@ -250,6 +325,18 @@ impl App {
                     self.screen = Screen::AvrPick { sel: self.avr_pick_current(st).unwrap_or(0), back: None };
                     return;
                 }
+                // With a newer version known: its notes and install; else OK checks now (an
+                // explicit request, switch or not).
+                Item::Update if st.update.offer.is_some() => {
+                    self.open_update(st);
+                    return;
+                }
+                Item::Update if *k == Nav::Ok && !st.update.checking => {
+                    if let Ok(mut shared) = self.backend.state.lock() {
+                        shared.update.checking = true;
+                    }
+                    let _ = self.backend.commands.send(Command::CheckUpdate { manual: true });
+                }
                 // Right only opens pages.
                 _ if *k == Nav::Right => {}
                 Item::Layout => {
@@ -271,7 +358,10 @@ impl App {
                 }
                 Item::ShowPreviews if st.preview_supported == Some(false) => {}
                 Item::Reset if confirm_reset => {
-                    // Inputs and the remote's keys stay: the key filter keeps matching the config.
+                    // Inputs and the remote's settings stay: the key filter keeps matching the config.
+                    // The Apps tile goes back off and its view to the grid, with the other tiles'
+                    // switches (its name, icon and place stay with the inputs', for when it is
+                    // turned on again).
                     let c = &self.cfg;
                     self.cfg = Config {
                         order: c.order.clone(),
@@ -279,14 +369,25 @@ impl App {
                         language: c.language,
                         source_key_opens: c.source_key_opens,
                         multikey_opens: c.multikey_opens,
+                        long_press_ms: c.long_press_ms,
+                        hold_gap_ms: c.hold_gap_ms,
                         avr: c.avr.clone(),
                         show_customize_tile: c.show_customize_tile,
+                        // Not a matter of looks: whether the TV asks the network stays as chosen.
+                        check_updates: c.check_updates,
                         ..Config::default()
                     };
                     self.retheme(ctx);
                     confirm_reset = false;
                 }
                 Item::Reset => confirm_reset = true,
+                Item::CheckUpdates => {
+                    self.adjust(item, 1);
+                    if self.cfg.check_updates {
+                        // Turned on: a check if one is due, as on opening.
+                        let _ = self.backend.commands.send(Command::CheckUpdate { manual: false });
+                    }
+                }
                 item => {
                     self.adjust(item, 1);
                     self.retheme(ctx);
@@ -353,7 +454,9 @@ impl App {
             Item::ShowLiveTv => (c.show_live_tv, true),
             Item::ShowUsb => (c.show_usb, true),
             Item::ShowMediaServers => (c.show_media_servers, true),
+            Item::ShowApps => (c.show_apps, true),
             Item::AvrEnabled => (c.avr.enabled, true),
+            Item::CheckUpdates => (c.check_updates, true),
             _ => (false, false),
         }
     }
@@ -391,12 +494,17 @@ impl App {
             Item::ShowHome => c.show_home = !c.show_home,
             Item::ShowUsb => c.show_usb = !c.show_usb,
             Item::ShowMediaServers => c.show_media_servers = !c.show_media_servers,
+            Item::ShowApps => c.show_apps = !c.show_apps,
+            Item::AppsView => c.apps_view = cycle(&crate::config::AppsView::ALL, c.apps_view, dir),
             Item::AvrEnabled => c.avr.enabled = !c.avr.enabled,
+            Item::CheckUpdates => c.check_updates = !c.check_updates,
             Item::AvrProtocol => c.avr.protocol = cycle(&crate::denon::Protocol::ALL, c.avr.protocol, dir),
             Item::AutoClose => c.auto_close_secs = cycle_num(&[0, 5, 10, 15, 30, 60], c.auto_close_secs, dir),
             // Quick switch is always on: only its delay is set.
             Item::SwitchDelay => c.switch_delay_secs = cycle_num(&[1, 2, 3, 4, 5, 7, 10], c.switch_delay_secs, dir),
-            Item::ClockPlace | Item::Sources | Item::Reset | Item::SourceKey | Item::MultikeyOpens | Item::CaptureAccess | Item::AvrDevice => {}
+            Item::LongPress => c.long_press_ms = cycle_num(&crate::config::LONG_PRESS_MS, c.long_press_ms, dir),
+            Item::HoldGap => c.hold_gap_ms = cycle_num(&crate::config::HOLD_GAP_MS, c.hold_gap_ms, dir),
+            Item::ClockPlace | Item::Sources | Item::Reset | Item::SourceKey | Item::MultikeyOpens | Item::CaptureAccess | Item::AvrDevice | Item::Update => {}
         }
     }
 
@@ -434,6 +542,10 @@ impl App {
             "section.clock" => c.clock.style.label().into(),
             "section.avr" if !c.avr.enabled => t("summary.avr_off").into(),
             "section.avr" => super::avr::status_text(st),
+            // Where a newer version is said, discreetly, besides the Customize tile.
+            "section.general" if self.update_notice(st).is_some() => {
+                tf("update.available", &[("version", self.update_notice(st).map_or("", |o| o.version.as_str()))])
+            }
             "section.remote" => match &st.key_owner {
                 _ if st.takeover_busy => t("remote.applying").into(),
                 KeyOwner::Unsupported => t("remote.unsupported").into(),
@@ -451,6 +563,7 @@ impl App {
     fn setting_row(&self, item: Item, confirm_reset: bool, st: &TvState) -> (&'static str, String) {
         let c = &self.cfg;
         let secs = |v: u32, off: &'static str| if v == 0 { t(off).to_string() } else { tf("value.seconds", &[("n", &v.to_string())]) };
+        let ms = |v: u32| tf("value.ms", &[("n", &v.to_string())]);
         let none = String::new;
         match item {
             Item::Language => (t("settings.language"), language_label(c.language).into()),
@@ -494,8 +607,12 @@ impl App {
             Item::ShowHome => (t("settings.show_home"), none()),
             Item::ShowUsb => (t("settings.show_usb"), none()),
             Item::ShowMediaServers => (t("settings.show_media_servers"), none()),
+            Item::ShowApps => (t("settings.show_apps"), none()),
+            Item::AppsView => (t("settings.apps_view"), c.apps_view.label().into()),
             Item::AutoClose => (t("settings.auto_close"), secs(c.auto_close_secs, "value.never")),
             Item::SwitchDelay => (t("settings.switch_delay"), tf("value.seconds", &[("n", &c.switch_delay_secs.to_string())])),
+            Item::LongPress => (t("settings.long_press"), ms(c.long_press_ms)),
+            Item::HoldGap => (t("settings.hold_gap"), ms(c.hold_gap_ms)),
             Item::MultikeyOpens => (t("settings.multikey_opens"), Self::remote_status(st)),
             Item::SourceKey => (t("settings.source_key"), Self::remote_status(st)),
             Item::Sources => (t("settings.sources"), t("settings.sources_value").into()),
@@ -503,6 +620,8 @@ impl App {
             Item::AvrEnabled => (t("settings.avr_enabled"), none()),
             Item::AvrDevice => (t("settings.avr_device"), super::avr::status_text(st)),
             Item::AvrProtocol => (t("settings.avr_protocol"), super::avr::protocol_label(c.avr.protocol).into()),
+            Item::CheckUpdates => (t("settings.check_updates"), none()),
+            Item::Update => (t("settings.update"), super::update::status_text(st)),
         }
     }
 
@@ -525,68 +644,43 @@ impl App {
         let head = pad + 38.0 * s + 18.0 * s;
         let foot = 72.0 * s;
         let row_h = 52.0 * s;
-        let sec_h = 44.0 * s;
+        // Under the rows: what the selected one does, in a sentence (two lines at most).
+        let help_h = HELP_H * s;
         let rows: Vec<SettingsRow> = match page {
             None => (0..PAGES.len()).map(SettingsRow::Page).collect(),
-            Some(pg) => std::iter::once(SettingsRow::Section(PAGES[pg].0))
-                .chain(page_items(pg, &self.cfg, st).into_iter().map(SettingsRow::Option))
-                .collect(),
+            Some(pg) => page_items(pg, &self.cfg, st).into_iter().map(SettingsRow::Option).collect(),
         };
-        let height_of = |r: &SettingsRow| match r {
-            SettingsRow::Section(_) => sec_h,
-            _ => row_h,
-        };
-        let total: f32 = rows.iter().map(height_of).sum();
-        let want = vec2(860.0 * s, head + total + foot + 8.0 * s);
+        let total = rows.len() as f32 * row_h;
+        let want = vec2(860.0 * s, head + total + help_h + foot + 8.0 * s);
         let rect = self.panel_rect(screen, want).translate(offset);
         self.panel(p, rect, alpha);
-        let subtitle = match page {
-            None => tf("settings.version", &[("version", env!("CARGO_PKG_VERSION"))]),
-            Some(_) => t("settings.subtitle").into(),
-        };
-        self.header(p, rect, t("settings.title"), &subtitle, alpha);
-
-        let area = Rect::from_min_max(pos2(rect.min.x + pad * 0.6, rect.min.y + head), pos2(rect.max.x - pad * 0.6, rect.max.y - foot));
-        // Row tops, and which drawn row each selectable index is.
-        let mut tops = Vec::with_capacity(rows.len());
-        let mut selectable = Vec::with_capacity(rows.len());
-        let mut y = 0.0;
-        for (ri, r) in rows.iter().enumerate() {
-            tops.push(y);
-            y += height_of(r);
-            if !matches!(r, SettingsRow::Section(_)) {
-                selectable.push(ri);
-            }
+        // A section's page is titled by the section, with where it is on the right.
+        match page {
+            None => self.header(p, rect, None, t("settings.title"), &tf("settings.version", &[("version", env!("CARGO_PKG_VERSION"))]), alpha),
+            Some(pg) => self.header(p, rect, Some(PAGES[pg].1), t(PAGES[pg].0), &format!("{} · {}", t("settings.title"), t("settings.subtitle")), alpha),
         }
-        let sel = sel.min(selectable.len().saturating_sub(1));
+        // The pages whose settings change the picker's look show it, live.
+        if page.is_some_and(|pg| matches!(PAGES[pg].0, "section.appearance" | "section.layout")) {
+            self.draw_mini_picker(ui, p, st, screen, rect, alpha);
+        }
+
+        let area = Rect::from_min_max(pos2(rect.min.x + pad * 0.6, rect.min.y + head), pos2(rect.max.x - pad * 0.6, rect.max.y - foot - help_h));
+        let sel = sel.min(rows.len().saturating_sub(1));
         // Pages fit at every size on a 1080p screen; scroll only on smaller ones.
-        let sel_row = selectable.get(sel).copied().unwrap_or(0);
         let want_scroll = if total <= area.height() {
             0.0
         } else {
-            (tops[sel_row] + row_h / 2.0 - area.height() / 2.0).clamp(0.0, total - area.height())
+            (sel as f32 * row_h + row_h / 2.0 - area.height() / 2.0).clamp(0.0, total - area.height())
         };
         // Only sideways slack (for the selection ring): rows never spill over the title or hints.
         let clip = p.with_clip_rect(area.expand2(vec2(6.0 * s, 0.0)));
         let y0 = self.anim(ui, &format!("settings-scroll-{page:?}"), want_scroll, 0.15);
-        let mut i = 0;
-        for (ri, row) in rows.iter().enumerate() {
-            let top = area.min.y + tops[ri] - y0;
+        for (this, row) in rows.iter().enumerate() {
+            let top = area.min.y + this as f32 * row_h - y0;
             let item = match *row {
-                SettingsRow::Section(key) => {
-                    // The open section's title: small caps label with a hairline.
-                    let ty = top + sec_h - 16.0 * s;
-                    let label = t(key).to_uppercase();
-                    let lr = clip.text(pos2(area.min.x + 16.0 * s, ty), Align2::LEFT_CENTER, label, semibold(15.0 * s), veil(k.text_faint, alpha));
-                    let line = Rect::from_min_max(pos2(lr.max.x + 12.0 * s, ty - 0.5 * s), pos2(area.max.x - 14.0 * s, ty + 0.5 * s));
-                    clip.rect_filled(line, 0.0, veil(k.separator, alpha));
-                    continue;
-                }
                 SettingsRow::Page(_) => None,
                 SettingsRow::Option(item) => Some(item),
             };
-            let this = i;
-            i += 1;
             if top + row_h < area.min.y - row_h || top > area.max.y + row_h {
                 continue;
             }
@@ -699,7 +793,9 @@ impl App {
                     }
                 }
                 RowKind::Page => {
-                    clip.text(pos2(right - chev - 8.0 * s, cy), Align2::RIGHT_CENTER, &value, vfont, veil(vcol, alpha));
+                    let room = (right - chev - 8.0 * s - label_end).max(0.0);
+                    let vcol = if item == Item::Update && st.update.offer.is_some() && !selected { k.accent } else { vcol };
+                    clip.text(pos2(right - chev - 8.0 * s, cy), Align2::RIGHT_CENTER, fit(p, &value, vfont.clone(), room), vfont, veil(vcol, alpha));
                     let cr = Rect::from_center_size(pos2(right - chev / 2.0, cy), Vec2::splat(chev));
                     icons::paint(&clip, "chevron-right", cr, veil(if selected { k.accent_text } else { k.text_faint }, alpha));
                 }
@@ -717,6 +813,25 @@ impl App {
                 }
             }
         }
+        // What the selected row does, under a hairline.
+        let help = match rows.get(sel) {
+            Some(SettingsRow::Page(pg)) => t(PAGE_HELP[*pg]).to_string(),
+            // A failed check: why, in full (the row has room for the start of it).
+            Some(SettingsRow::Option(Item::Update)) if !st.update.checking && st.update.offer.is_none() && matches!(st.update.checked, Some(Err(_))) => {
+                let e = match &st.update.checked {
+                    Some(Err(e)) => e.as_str(),
+                    _ => "",
+                };
+                tf("help.update_failed", &[("error", e)])
+            }
+            Some(SettingsRow::Option(Item::Update)) if st.update.offer.is_some() => {
+                tf("help.update_available", &[("version", st.update.offer.as_ref().map_or("", |o| o.version.as_str()))])
+            }
+            Some(SettingsRow::Option(item)) => t(help_key(*item)).to_string(),
+            None => String::new(),
+        };
+        self.help_line(p, Rect::from_min_max(pos2(area.min.x, area.max.y), pos2(area.max.x, area.max.y + help_h)), &help, alpha);
+
         // The hints say what the selected row's keys actually do: Back goes up a level.
         let choose = ("▲ ▼", t("hint.choose"));
         let hints: Vec<(&str, &str)> = match page {
@@ -726,6 +841,9 @@ impl App {
                 match page_items(pg, &self.cfg, st).get(sel).map(|&it| (it, row_kind_of(it))) {
                     Some((Item::Layout | Item::Position, _)) => vec![choose, ("◀ ▶", t("hint.change")), (t("key.ok"), t("hint.open")), back],
                     Some((_, RowKind::Choice)) => vec![choose, ("◀ ▶", t("hint.change")), back],
+                    Some((Item::Update, _)) if st.update.offer.is_none() => {
+                        if st.update.checking { vec![choose, back] } else { vec![choose, (t("key.ok"), t("hint.check")), back] }
+                    }
                     Some((_, RowKind::Slider(..))) => vec![choose, ("◀ ▶", t("hint.adjust")), back],
                     Some((it, RowKind::Toggle)) if self.toggle_state(it, st).1 => vec![choose, (t("key.ok"), t("hint.toggle_onoff")), back],
                     Some((_, RowKind::Page)) => vec![choose, (t("key.ok"), t("hint.open")), back],

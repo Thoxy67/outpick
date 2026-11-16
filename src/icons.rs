@@ -78,10 +78,12 @@ pub enum SourceIcon {
     NintendoSwitch,
     Android,
     Pc,
+    /// The Apps tile's.
+    Apps,
 }
 
 impl SourceIcon {
-    pub const ALL: [SourceIcon; 20] = [
+    pub const ALL: [SourceIcon; 21] = [
         SourceIcon::Auto,
         SourceIcon::Tv,
         SourceIcon::Monitor,
@@ -102,6 +104,7 @@ impl SourceIcon {
         SourceIcon::NintendoSwitch,
         SourceIcon::Android,
         SourceIcon::Pc,
+        SourceIcon::Apps,
     ];
 
     pub fn svg(self) -> &'static str {
@@ -125,6 +128,7 @@ impl SourceIcon {
             SourceIcon::NintendoSwitch => "nintendo-switch",
             SourceIcon::Android => "android",
             SourceIcon::Pc => "pc-case",
+            SourceIcon::Apps => "layout-grid",
         }
     }
 
@@ -150,6 +154,7 @@ impl SourceIcon {
             SourceIcon::NintendoSwitch => "Nintendo Switch",
             SourceIcon::Android => crate::i18n::t("icon.android"),
             SourceIcon::Pc => crate::i18n::t("icon.pc"),
+            SourceIcon::Apps => crate::i18n::t("icon.apps"),
         }
     }
 }
